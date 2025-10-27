@@ -40,7 +40,7 @@ setup(
     include_package_data=True,
     
     # Python版本要求
-    python_requires=">=3.8",
+    python_requires=">=3.11",
     
     # 依賴套件
     install_requires=requirements,

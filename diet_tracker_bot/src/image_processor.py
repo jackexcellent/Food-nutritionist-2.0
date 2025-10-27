@@ -72,7 +72,7 @@ class ImageProcessor:
         """初始化圖像處理器"""
         self.azure_client = None
         self.max_image_size = (800, 600)  # 標準預處理尺寸
-        self.blur_kernel_size = (5, 5)   # 高斯模糊核心大小
+        self.enhancement_enabled = True   # 啟用圖像增強
         
         # 初始化Azure Computer Vision客戶端
         if AZURE_AVAILABLE:
@@ -150,32 +150,77 @@ class ImageProcessor:
             resized_image = cv2.resize(image, self.max_image_size, 
                                      interpolation=cv2.INTER_LANCZOS4)
             
-            # 應用高斯模糊去噪（輕微模糊，保持細節）
-            blurred_image = cv2.GaussianBlur(resized_image, self.blur_kernel_size, 0)
+            # 圖像增強：提升對比度和亮度（而不是模糊）
+            enhanced_image = self._enhance_image_quality(resized_image)
             
-            logger.debug(f"預處理後圖像尺寸: {blurred_image.shape}")
+            logger.debug(f"預處理後圖像尺寸: {enhanced_image.shape}")
             
             # 保存預處理後的圖像用於偵錯
-            temp_path = save_temp_image(blurred_image, "preprocessed_image.jpg")
+            temp_path = save_temp_image(enhanced_image, "preprocessed_image.jpg")
             logger.debug(f"預處理圖像已保存到: {temp_path}")
             
-            return blurred_image
+            return enhanced_image
             
         except Exception as e:
             return handle_error(e, f"預處理圖像 {image_path}", 
                               logger=logger, raise_error=False, default_return=None)
-    
+
+    def _enhance_image_quality(self, image: np.ndarray) -> np.ndarray:
+        """
+        增強圖像品質而不降低清晰度
+        
+        執行以下增強步驟：
+        1. 自動對比度調整（CLAHE）
+        2. 輕微銳化處理
+        3. 色彩平衡調整
+        
+        Args:
+            image (np.ndarray): 輸入圖像
+        
+        Returns:
+            np.ndarray: 增強後的圖像
+        """
+        try:
+            # 轉換到 LAB 色彩空間進行亮度增強
+            lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+            l_channel, a_channel, b_channel = cv2.split(lab)
+            
+            # 應用 CLAHE（對比度限制自適應直方圖均衡化）到亮度通道
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            enhanced_l = clahe.apply(l_channel)
+            
+            # 合併通道並轉換回 BGR
+            enhanced_lab = cv2.merge([enhanced_l, a_channel, b_channel])
+            enhanced_image = cv2.cvtColor(enhanced_lab, cv2.COLOR_LAB2BGR)
+            
+            # 輕微銳化（增強細節而不產生噪點）
+            kernel = np.array([[-0.1, -0.1, -0.1],
+                             [-0.1,  1.8, -0.1],
+                             [-0.1, -0.1, -0.1]])
+            sharpened = cv2.filter2D(enhanced_image, -1, kernel)
+            
+            # 混合原圖和銳化圖像（85% 銳化 + 15% 原圖）
+            final_image = cv2.addWeighted(sharpened, 0.85, enhanced_image, 0.15, 0)
+            
+            logger.debug("圖像品質增強完成：對比度提升 + 輕微銳化")
+            return final_image
+            
+        except Exception as e:
+            logger.warning(f"圖像增強失敗，使用原圖: {e}")
+            return image
+
     def analyze_image_with_azure(self, image_data) -> List[str]:
         """
         使用Azure Computer Vision API分析圖像
         
         將圖像數據發送到Azure API進行分析，提取食物相關的標籤和描述。
+        使用詳細的食物識別prompt來獲取更精確的食物名稱、份量和成分信息。
         
         Args:
             image_data: 圖像的二進制數據流（BytesIO 物件）
         
         Returns:
-            List[str]: 識別出的食物名稱列表
+            List[str]: 識別出的詳細食物資訊列表
         
         未來擴展：
         - 支援自訂置信度閾值
@@ -188,43 +233,147 @@ class ImageProcessor:
             return []
         
         try:
-            # 使用Azure Computer Vision API分析圖像
-            # 獲取標籤（tags）- 包含食物相關關鍵詞
+            # 使用Azure Computer Vision API進行詳細的食物分析
+            # 獲取多種視覺特徵以提供更完整的食物資訊
             analysis = self.azure_client.analyze_image_in_stream(
                 image_data,
-                visual_features=['Tags', 'Description', 'Categories']
+                visual_features=['Tags', 'Description', 'Categories', 'Objects']
+                # 注意：移除了details參數，因為Azure Computer Vision v3.2 API不支援'Food'作為details值
             )
             
             food_items = []
+            detailed_descriptions = []
             
-            # 從標籤中提取食物相關項目
+            # 首先記錄所有 API 返回的原始數據以便調試
+            logger.debug("=== Azure API 原始返回數據 ===")
+            
+            # 檢查並記錄標籤信息
             if hasattr(analysis, 'tags') and analysis.tags:
-                food_tags = self._extract_food_from_tags(analysis.tags)
+                logger.debug(f"發現 {len(analysis.tags)} 個標籤:")
+                for i, tag in enumerate(analysis.tags[:10]):  # 只顯示前10個
+                    confidence = getattr(tag, 'confidence', 0.0)
+                    logger.debug(f"  標籤 {i+1}: {tag.name} (置信度: {confidence:.3f})")
+                
+                food_tags = self._extract_detailed_food_from_tags(analysis.tags)
                 food_items.extend(food_tags)
                 logger.debug(f"從標籤提取到 {len(food_tags)} 個食物項目")
+            else:
+                logger.debug("沒有找到標籤信息")
             
-            # 從描述中提取食物相關項目
+            # 檢查並記錄描述信息
             if hasattr(analysis, 'description') and analysis.description:
-                food_descriptions = self._extract_food_from_descriptions(analysis.description)
-                food_items.extend(food_descriptions)
-                logger.debug(f"從描述提取到 {len(food_descriptions)} 個食物項目")
+                logger.debug("描述信息:")
+                if hasattr(analysis.description, 'captions') and analysis.description.captions:
+                    for i, caption in enumerate(analysis.description.captions):
+                        confidence = getattr(caption, 'confidence', 0.0)
+                        logger.debug(f"  描述 {i+1}: {caption.text} (置信度: {confidence:.3f})")
+                
+                detailed_food_info = self._extract_detailed_food_descriptions(analysis.description)
+                detailed_descriptions.extend(detailed_food_info)
+                logger.debug(f"從描述提取到 {len(detailed_food_info)} 個詳細描述")
+            else:
+                logger.debug("沒有找到描述信息")
             
-            # 去除重複項目並過濾
-            unique_foods = list(set(food_items))
-            filtered_foods = self._filter_food_items(unique_foods)
+            # 檢查並記錄物件檢測信息
+            if hasattr(analysis, 'objects') and analysis.objects:
+                logger.debug(f"發現 {len(analysis.objects)} 個物件:")
+                for i, obj in enumerate(analysis.objects[:5]):  # 只顯示前5個
+                    confidence = getattr(obj, 'confidence', 0.0)
+                    logger.debug(f"  物件 {i+1}: {obj.object_property} (置信度: {confidence:.3f})")
+                
+                object_foods = self._extract_food_from_objects(analysis.objects)
+                food_items.extend(object_foods)
+                logger.debug(f"從物件檢測提取到 {len(object_foods)} 個食物項目")
+            else:
+                logger.debug("沒有找到物件檢測信息")
             
-            logger.info(f"Azure API 識別出 {len(filtered_foods)} 個食物項目: {filtered_foods}")
+            # 檢查分類信息
+            if hasattr(analysis, 'categories') and analysis.categories:
+                logger.debug(f"發現 {len(analysis.categories)} 個分類:")
+                for i, category in enumerate(analysis.categories):
+                    score = getattr(category, 'score', 0.0)
+                    logger.debug(f"  分類 {i+1}: {category.name} (分數: {score:.3f})")
+            else:
+                logger.debug("沒有找到分類信息")
+            
+            logger.debug("=== 原始數據記錄完畢 ===")
+            
+            # 合併所有食物資訊
+            all_food_info = food_items + detailed_descriptions
+            
+            # 去除重複項目並進行智能過濾
+            unique_foods = list(set(all_food_info))
+            filtered_foods = self._filter_and_enhance_food_items(unique_foods)
+            
+            logger.info(f"Azure API 識別出 {len(filtered_foods)} 個詳細食物項目")
+            for food in filtered_foods:
+                logger.debug(f"識別食物: {food}")
+            
             return filtered_foods
             
         except Exception as e:
             return handle_error(e, "Azure Computer Vision API 呼叫", 
                               logger=logger, raise_error=False, default_return=[])
     
+    def _extract_detailed_food_from_tags(self, tags) -> List[str]:
+        """
+        從Azure API標籤中提取詳細的食物相關項目
+        
+        過濾出與食物相關的標籤，並包含置信度和詳細資訊。
+        
+        Args:
+            tags: Azure API返回的標籤列表
+        
+        Returns:
+            List[str]: 包含詳細資訊的食物標籤列表
+        """
+        # 擴展的食物關鍵詞，包含更具體的食物類型
+        food_keywords = {
+            'food', 'dish', 'meal', 'cuisine', 'ingredient', 'fruit', 'vegetable',
+            'meat', 'fish', 'bread', 'rice', 'pasta', 'soup', 'salad', 'dessert',
+            'drink', 'beverage', 'snack', 'breakfast', 'lunch', 'dinner',
+            'chicken', 'beef', 'pork', 'salmon', 'tuna', 'apple', 'banana',
+            'orange', 'tomato', 'carrot', 'broccoli', 'potato', 'noodles',
+            'sandwich', 'pizza', 'burger', 'sushi', 'cake', 'cookie', 'cheese'
+        }
+        
+        # 非食物關鍵詞，需要排除
+        non_food_keywords = {
+            'person', 'table', 'plate', 'bowl', 'cup', 'utensil', 'restaurant',
+            'kitchen', 'background', 'indoor', 'outdoor', 'hand', 'finger'
+        }
+        
+        food_items = []
+        
+        for tag in tags:
+            tag_name = tag.name.lower().strip()
+            confidence = getattr(tag, 'confidence', 0.0)
+            
+            # 降低置信度閾值以獲取更多可能的食物項目
+            if confidence < 0.2:
+                continue
+            
+            # 檢查是否為食物相關標籤
+            is_food_related = any(keyword in tag_name for keyword in food_keywords)
+            is_non_food = any(keyword in tag_name for keyword in non_food_keywords)
+            
+            if is_food_related and not is_non_food:
+                # 根據置信度添加詳細資訊
+                if confidence >= 0.7:
+                    food_detail = f"{tag_name} (高置信度: {confidence:.2f})"
+                elif confidence >= 0.5:
+                    food_detail = f"{tag_name} (中置信度: {confidence:.2f})"
+                else:
+                    food_detail = f"{tag_name} (可能性: {confidence:.2f})"
+                
+                food_items.append(food_detail)
+                logger.debug(f"詳細食物標籤: {food_detail}")
+        
+        return food_items
+    
     def _extract_food_from_tags(self, tags) -> List[str]:
         """
-        從Azure API標籤中提取食物相關項目
-        
-        過濾出與食物相關的標籤，排除非食物項目。
+        從Azure API標籤中提取食物相關項目（舊版本，保持兼容性）
         
         Args:
             tags: Azure API返回的標籤列表
@@ -238,7 +387,6 @@ class ImageProcessor:
             'drink', 'beverage', 'snack', 'breakfast', 'lunch', 'dinner'
         }
         
-        # 非食物關鍵詞，需要排除
         non_food_keywords = {
             'person', 'table', 'plate', 'bowl', 'cup', 'utensil', 'restaurant',
             'kitchen', 'background', 'indoor', 'outdoor'
@@ -250,11 +398,9 @@ class ImageProcessor:
             tag_name = tag.name.lower().strip()
             confidence = getattr(tag, 'confidence', 0.0)
             
-            # 置信度篩選（可調整）
             if confidence < 0.3:
                 continue
             
-            # 檢查是否為食物相關標籤
             is_food_related = any(keyword in tag_name for keyword in food_keywords)
             is_non_food = any(keyword in tag_name for keyword in non_food_keywords)
             
@@ -264,11 +410,109 @@ class ImageProcessor:
         
         return food_items
     
+    def _extract_detailed_food_descriptions(self, description) -> List[str]:
+        """
+        從Azure API描述中提取詳細的食物相關資訊
+        
+        分析圖像描述文字，提取詳細的食物名稱、份量和成分資訊。
+        
+        Args:
+            description: Azure API返回的描述對象
+        
+        Returns:
+            List[str]: 從描述中提取的詳細食物資訊
+        """
+        food_descriptions = []
+        
+        # 處理主要描述
+        if hasattr(description, 'captions') and description.captions:
+            for caption in description.captions:
+                if hasattr(caption, 'text'):
+                    text = caption.text
+                    confidence = getattr(caption, 'confidence', 0.0)
+                    
+                    # 分析描述文字以提取詳細資訊
+                    detailed_info = self._analyze_food_description(text, confidence)
+                    if detailed_info:
+                        food_descriptions.extend(detailed_info)
+        
+        return food_descriptions
+    
+    def _analyze_food_description(self, description_text: str, confidence: float) -> List[str]:
+        """
+        詳細分析描述文字以提取食物資訊
+        
+        Args:
+            description_text (str): 描述文字
+            confidence (float): 描述的置信度
+        
+        Returns:
+            List[str]: 提取的詳細食物資訊
+        """
+        detailed_foods = []
+        text = description_text.lower()
+        
+        # 份量相關關鍵詞
+        portion_keywords = {
+            'bowl', 'plate', 'cup', 'glass', 'slice', 'piece', 'serving',
+            'portion', 'small', 'large', 'medium', 'big', 'little', 'full',
+            'half', 'quarter', 'whole', 'single', 'double', 'triple'
+        }
+        
+        # 烹飪方式關鍵詞
+        cooking_methods = {
+            'fried', 'grilled', 'baked', 'steamed', 'boiled', 'roasted',
+            'sautéed', 'raw', 'fresh', 'cooked', 'prepared'
+        }
+        
+        # 成分和配菜關鍵詞
+        ingredient_keywords = {
+            'with', 'and', 'topped', 'served', 'garnished', 'mixed',
+            'contains', 'includes', 'accompanied'
+        }
+        
+        # 基本食物提取
+        basic_foods = self._extract_foods_from_text(text)
+        
+        # 分析份量資訊
+        portion_info = []
+        for portion in portion_keywords:
+            if portion in text:
+                portion_info.append(portion)
+        
+        # 分析烹飪方式
+        cooking_info = []
+        for method in cooking_methods:
+            if method in text:
+                cooking_info.append(method)
+        
+        # 組合詳細資訊
+        if basic_foods:
+            base_description = f"描述: {description_text}"
+            if confidence >= 0.5:
+                base_description += f" (高可信度: {confidence:.2f})"
+            else:
+                base_description += f" (可信度: {confidence:.2f})"
+            
+            detailed_foods.append(base_description)
+            
+            # 為每個識別的食物添加詳細資訊
+            for food in basic_foods:
+                food_detail = f"食物: {food}"
+                
+                if portion_info:
+                    food_detail += f" | 份量描述: {', '.join(portion_info)}"
+                
+                if cooking_info:
+                    food_detail += f" | 烹飪方式: {', '.join(cooking_info)}"
+                
+                detailed_foods.append(food_detail)
+        
+        return detailed_foods
+    
     def _extract_food_from_descriptions(self, description) -> List[str]:
         """
-        從Azure API描述中提取食物相關項目
-        
-        分析圖像描述文字，提取可能的食物名稱。
+        從Azure API描述中提取食物相關項目（舊版本，保持兼容性）
         
         Args:
             description: Azure API返回的描述對象
@@ -278,11 +522,9 @@ class ImageProcessor:
         """
         food_items = []
         
-        # 處理主要描述
         if hasattr(description, 'captions') and description.captions:
             for caption in description.captions:
                 if hasattr(caption, 'text'):
-                    # 簡單的關鍵詞提取（未來可用NLP改進）
                     text = caption.text.lower()
                     potential_foods = self._extract_foods_from_text(text)
                     food_items.extend(potential_foods)
@@ -320,11 +562,107 @@ class ImageProcessor:
         
         return found_foods
     
+    def _extract_food_from_objects(self, objects) -> List[str]:
+        """
+        從Azure API物件檢測中提取食物相關項目
+        
+        分析檢測到的物件，提取食物項目和位置資訊。
+        
+        Args:
+            objects: Azure API返回的物件列表
+        
+        Returns:
+            List[str]: 從物件檢測中提取的食物項目
+        """
+        food_objects = []
+        
+        for obj in objects:
+            object_name = obj.object_property.lower().strip()
+            confidence = getattr(obj, 'confidence', 0.0)
+            
+            # 檢查是否為食物相關物件
+            food_related_objects = {
+                'apple', 'banana', 'orange', 'sandwich', 'pizza', 'burger',
+                'cake', 'cookie', 'bread', 'donut', 'hot dog', 'taco'
+            }
+            
+            if object_name in food_related_objects and confidence >= 0.3:
+                # 獲取物件位置資訊
+                if hasattr(obj, 'rectangle'):
+                    rect = obj.rectangle
+                    location_info = f"物件: {object_name} (位置: x={rect.x}, y={rect.y}, 寬={rect.w}, 高={rect.h}, 置信度: {confidence:.2f})"
+                else:
+                    location_info = f"物件: {object_name} (置信度: {confidence:.2f})"
+                
+                food_objects.append(location_info)
+                logger.debug(f"檢測到食物物件: {location_info}")
+        
+        return food_objects
+    
+    def _filter_and_enhance_food_items(self, food_items: List[str]) -> List[str]:
+        """
+        增強版的食物項目過濾和整理函數
+        
+        保留詳細資訊並進行智能過濾。
+        
+        Args:
+            food_items (List[str]): 原始食物項目列表
+        
+        Returns:
+            List[str]: 過濾和增強後的食物項目列表
+        """
+        if not food_items:
+            return []
+        
+        # 分類不同類型的資訊
+        simple_foods = []
+        detailed_descriptions = []
+        object_detections = []
+        confidence_foods = []
+        
+        for item in food_items:
+            if item.startswith('描述:'):
+                detailed_descriptions.append(item)
+            elif item.startswith('食物:'):
+                detailed_descriptions.append(item)
+            elif item.startswith('物件:'):
+                object_detections.append(item)
+            elif '置信度' in item or '可信度' in item or '可能性' in item:
+                confidence_foods.append(item)
+            else:
+                simple_foods.append(item)
+        
+        # 組合結果，保持詳細資訊的完整性
+        result = []
+        
+        # 添加詳細描述（最重要的資訊）
+        if detailed_descriptions:
+            result.extend(detailed_descriptions)
+        
+        # 添加物件檢測結果
+        if object_detections:
+            result.extend(object_detections)
+        
+        # 添加有置信度的食物項目
+        if confidence_foods:
+            result.extend(confidence_foods)
+        
+        # 添加簡單的食物名稱（去重）
+        if simple_foods:
+            unique_simple = list(set(simple_foods))
+            result.extend(unique_simple)
+        
+        logger.debug(f"詳細過濾結果 - 總項目: {len(result)}")
+        logger.debug(f"  描述: {len(detailed_descriptions)} 項")
+        logger.debug(f"  物件: {len(object_detections)} 項") 
+        logger.debug(f"  置信度食物: {len(confidence_foods)} 項")
+        logger.debug(f"  簡單食物: {len(set(simple_foods))} 項")
+        
+        return result
+    
     def _filter_food_items(self, food_items: List[str]) -> List[str]:
         """
-        過濾和清理食物項目列表
-        
-        移除重複、無效或不相關的項目。
+        過濾和清理食物項目列表（舊版本，保持兼容性）
         
         Args:
             food_items (List[str]): 原始食物項目列表
@@ -357,24 +695,30 @@ def process_image(image_path: str) -> List[str]:
     
     這是模組的主要入口點，執行完整的圖像處理流程：
     1. 預處理圖像
-    2. 調用Azure API進行識別
-    3. 解析和過濾結果
+    2. 調用Azure API進行詳細的食物識別
+    3. 解析和整理結果，包含食物名稱、份量、成分等詳細資訊
     
     Args:
         image_path (str): 圖像檔案路徑
     
     Returns:
-        List[str]: 識別出的食物名稱列表
+        List[str]: 識別出的詳細食物資訊列表，包含：
+                  - 完整的圖像描述和置信度
+                  - 具體食物項目及其份量資訊
+                  - 物件檢測結果和位置資訊
+                  - 烹飪方式和成分描述
     
     使用範例:
         foods = process_image("my_meal.jpg")
-        print(f"識別出的食物: {foods}")
+        for food_info in foods:
+            print(f"食物資訊: {food_info}")
     
     未來擴展：
     - 支援URL圖像
     - 批量處理多張圖像
-    - 返回置信度分數
-    - 本地模型fallback
+    - 返回結構化的食物資訊字典
+    - 本地AI模型fallback
+    - 營養成分自動計算
     """
     logger.info(f"開始處理圖像: {image_path}")
     
