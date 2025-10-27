@@ -230,6 +230,82 @@ def format_file_size(size_bytes: int) -> str:
         size_bytes /= 1024.0
     return f"{size_bytes:.1f} PB"
 
+def save_temp_image(image_data, filename: str = "temp.jpg") -> str:
+    """
+    保存臨時圖像檔案
+    
+    將處理後的圖像數據保存到temp目錄，用於偵錯和臨時儲存。
+    這個函數確保temp目錄存在，並提供安全的檔案寫入。
+    
+    Args:
+        image_data: 圖像數據（numpy array 或 bytes）
+        filename (str): 檔案名稱，預設為 "temp.jpg"
+    
+    Returns:
+        str: 保存的檔案完整路徑
+    
+    Raises:
+        ValueError: 如果image_data格式不支援
+        IOError: 如果檔案寫入失敗
+    
+    使用範例:
+        import cv2
+        image = cv2.imread("input.jpg")
+        temp_path = save_temp_image(image, "processed_image.jpg")
+        print(f"圖像已保存到: {temp_path}")
+    
+    未來擴展：
+    - 支援多種圖像格式 (PNG, WEBP等)
+    - 自動檔案名稱生成（時間戳）
+    - 圖像壓縮選項
+    - 雲端儲存整合
+    """
+    import cv2
+    import numpy as np
+    
+    # 確保temp目錄存在
+    project_root = Path(__file__).parent.parent
+    temp_dir = project_root / "temp"
+    temp_dir.mkdir(exist_ok=True)
+    
+    # 建構完整檔案路徑
+    file_path = temp_dir / filename
+    
+    logger = logging.getLogger(__name__)
+    
+    try:
+        # 處理不同類型的圖像數據
+        if isinstance(image_data, np.ndarray):
+            # OpenCV numpy array 格式
+            logger.debug(f"保存numpy array圖像，形狀: {image_data.shape}")
+            success = cv2.imwrite(str(file_path), image_data)
+            if not success:
+                raise IOError(f"cv2.imwrite 失敗，無法保存到 {file_path}")
+                
+        elif isinstance(image_data, bytes):
+            # 二進制圖像數據
+            logger.debug(f"保存二進制圖像數據，大小: {len(image_data)} bytes")
+            with open(file_path, 'wb') as f:
+                f.write(image_data)
+                
+        else:
+            # 不支援的數據類型
+            raise ValueError(f"不支援的圖像數據類型: {type(image_data)}")
+        
+        # 驗證檔案是否成功保存
+        if not file_path.exists():
+            raise IOError(f"檔案保存失敗，檔案不存在: {file_path}")
+        
+        file_size = file_path.stat().st_size
+        logger.debug(f"圖像成功保存: {file_path} ({format_file_size(file_size)})")
+        
+        return str(file_path)
+        
+    except Exception as e:
+        error_msg = f"保存臨時圖像失敗: {filename}"
+        logger.error(f"{error_msg} - {str(e)}")
+        raise IOError(f"{error_msg}") from e
+
 def create_project_directories() -> None:
     """
     確保專案所需的目錄結構存在

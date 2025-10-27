@@ -138,13 +138,30 @@ def main():
     logger.info(f"專案根目錄: {project_root}")
     logger.info(f"配置檔案: {config_path}")
     
-    # MVP階段：顯示待實現功能
+    # MVP階段：顯示功能開發進度
     logger.info("\n📋 MVP功能開發進度:")
+    logger.info("✅ 專案架構建立")
+    logger.info("✅ 圖像處理模組 (階段1完成)")
+    logger.info("✅ Azure Computer Vision API 整合")
+    logger.info("✅ 圖像預處理功能 (OpenCV)")
     logger.info("⏳ Discord Bot 核心功能")
-    logger.info("⏳ 圖像識別與食物偵測")
-    logger.info("⏳ 營養數據查詢與計算")
+    logger.info("⏳ 營養數據查詢與計算") 
     logger.info("⏳ 用戶歷史記錄儲存")
     logger.info("⏳ AI驅動的個人化推薦")
+    
+    # 顯示新增功能
+    logger.info("\n🆕 階段1新增功能:")
+    logger.info("  • 圖像預處理 (調整大小、去噪)")
+    logger.info("  • Azure Computer Vision API 整合")
+    logger.info("  • 食物識別結果解析和過濾")
+    logger.info("  • 臨時圖像檔案管理")
+    logger.info("  • 完整的錯誤處理和日誌記錄")
+    logger.info("  • 命令列測試介面")
+    
+    # 測試提示
+    logger.info("\n🧪 測試新功能:")
+    logger.info("  python -m src.image_processor your_image.jpg")
+    logger.info("  pytest tests/test_image_processor.py")
     
     # 未來在這裡添加Bot啟動邏輯
     # 例如：

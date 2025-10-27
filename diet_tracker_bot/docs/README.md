@@ -21,14 +21,16 @@ diet_tracker_bot/
 ├── src/                     # 核心程式碼
 │   ├── __init__.py         # 套件初始化
 │   ├── main.py             # 主程式入口點
-│   └── utils.py            # 共用工具函數
+│   ├── utils.py            # 共用工具函數
+│   └── image_processor.py  # 🆕 圖像處理模組
 ├── config/                  # 配置檔案
 │   └── .env                # 環境變數 (需要設定API金鑰)
 ├── data/                   # 資料檔案
 │   ├── tfnd_clean.jsonl    # 台灣食物營養資料庫
 │   └── cache/              # 快取資料 (自動生成)
 ├── tests/                  # 測試檔案
-│   └── __init__.py
+│   ├── __init__.py
+│   └── test_image_processor.py  # 🆕 圖像處理測試
 ├── docs/                   # 文件資料夾
 │   └── README.md           # 專案說明文件
 ├── logs/                   # 日誌檔案 (自動生成)
@@ -42,13 +44,11 @@ diet_tracker_bot/
 
 ```
 main.py
-├── utils.py (日誌、錯誤處理)
+├── utils.py (日誌、錯誤處理、圖像儲存)
+├── image_processor.py (🆕 圖像識別與食物偵測)
 ├── bot/ (未來實現)
 │   ├── discord_bot.py
 │   └── commands.py
-├── vision/ (未來實現)
-│   ├── food_detector.py
-│   └── image_processor.py
 ├── nutrition/ (未來實現)
 │   ├── usda_client.py
 │   ├── taiwan_data.py
@@ -129,7 +129,54 @@ DISCORD_TOKEN=your_discord_bot_token_here
 ```bash
 # 執行主程式 (目前為MVP開發階段)
 python src/main.py
+
+# 🆕 測試圖像處理功能 (階段1新增)
+python -m src.image_processor path/to/your/test_image.jpg
 ```
+
+## 🖼️ 階段 1: 圖像處理功能 (新增)
+
+### 圖像識別流程
+
+這個階段實現了核心的圖像處理和食物識別功能：
+
+1. **圖像預處理**:
+
+   - 自動調整圖像大小到 800x600 標準尺寸
+   - 使用高斯模糊去噪，保持食物細節清晰
+   - 保存預處理後的圖像到 `temp/` 目錄用於偵錯
+
+2. **Azure Computer Vision 整合**:
+
+   - 安全的 API 金鑰管理 (從 `.env` 載入)
+   - 智能的食物標籤提取 (過濾非食物項目)
+   - 多重數據源分析 (標籤 + 描述文字)
+
+3. **結果處理**:
+   - 去重和過濾無效項目
+   - 置信度篩選 (可調整閾值)
+   - 返回清理後的食物名稱列表
+
+### 使用範例
+
+```python
+from src.image_processor import process_image
+
+# 分析單張圖像
+foods = process_image("my_lunch.jpg")
+print(f"識別出的食物: {foods}")
+# 輸出: ['rice', 'chicken', 'vegetables']
+
+# 命令列使用
+python -m src.image_processor my_lunch.jpg --debug
+```
+
+### 錯誤處理與容錯
+
+- **API 故障**: 自動記錄錯誤並返回空列表，不會中斷程式
+- **圖像格式**: 支援常見格式 (JPG, PNG)，自動檢測無效檔案
+- **網路問題**: 完整的重試機制和超時處理
+- **未來擴展**: 預留本地 AI 模型 fallback 接口
 
 ## 📊 資料來源
 
@@ -168,11 +215,35 @@ python src/main.py
 # 執行所有測試
 pytest
 
+# 🆕 執行圖像處理模組測試
+pytest tests/test_image_processor.py -v
+
 # 執行特定測試檔案
 pytest tests/test_utils.py
 
 # 執行測試並生成覆蓋率報告
 pytest --cov=src tests/
+
+# 🆕 執行圖像處理測試（詳細輸出）
+pytest tests/test_image_processor.py -v --tb=short
+```
+
+### 🆕 圖像處理測試指南
+
+新增的測試涵蓋以下功能：
+
+1. **圖像預處理測試**: 驗證圖像調整大小和去噪功能
+2. **Azure API 模擬測試**: 使用 mock 避免真實 API 呼叫
+3. **食物識別解析測試**: 測試從 API 結果提取食物項目
+4. **錯誤處理測試**: 驗證各種異常情況的處理
+5. **工具函數測試**: 測試圖像保存和格式化功能
+
+```python
+# 運行特定測試類別
+pytest tests/test_image_processor.py::TestImageProcessor::test_preprocess_image_success -v
+
+# 運行整合測試
+pytest tests/test_image_processor.py::TestIntegration -v
 ```
 
 ## 📚 開發指南
@@ -210,21 +281,27 @@ except Exception as e:
 ### Phase 1: 核心功能實現 (MVP)
 
 - [x] 專案架構建立
+- [x] 🆕 圖像處理模組 (Azure Computer Vision 整合)
+- [x] 🆕 圖像預處理功能 (OpenCV)
+- [x] 🆕 食物識別與結果解析
 - [ ] Discord Bot 基礎功能
-- [ ] 圖像識別整合
 - [ ] 營養資料查詢
 - [ ] 基本資料儲存
 
 ### Phase 2: 功能增強
 
 - [ ] 用戶偏好設定
-- [ ] 多語言支援
+- [ ] 🆕 多語言食物名稱識別支援
+- [ ] 🆕 圖像增強和品質優化
+- [ ] 🆕 本地 AI 模型 fallback 機制
 - [ ] 圖表和統計功能
 - [ ] 食物資料庫擴充
 
 ### Phase 3: 高級功能
 
 - [ ] 機器學習模型訓練
+- [ ] 🆕 批量圖像處理
+- [ ] 🆕 圖像品質評估和自動校正
 - [ ] 個人化推薦算法
 - [ ] 社群功能 (分享、排行榜)
 - [ ] Web 儀表板介面
@@ -241,13 +318,45 @@ except Exception as e:
 
 - **後端**: Python 3.8+
 - **Discord**: discord.py
-- **電腦視覺**: Azure Computer Vision API, OpenCV
+- **🆕 電腦視覺**: Azure Computer Vision API, OpenCV
+- **🆕 圖像處理**: cv2, numpy, PIL (未來擴展)
 - **AI/LLM**: Google Gemini API
 - **資料庫**: SQLite (未來可遷移至 MongoDB)
 - **API**: USDA FoodData Central API
-- **測試**: pytest
+- **測試**: pytest, unittest.mock
 - **日誌**: Python logging, colorlog
 - **配置**: python-dotenv
+
+## 🔧 未來擴展計畫
+
+### 圖像處理增強 (階段 2 預計功能)
+
+1. **多 API 支援**:
+
+   ```python
+   # 預計支援的替代方案
+   - Google Vision API fallback
+   - AWS Rekognition 整合
+   - 本地 YOLO/ResNet 模型
+   ```
+
+2. **圖像增強功能**:
+
+   ```python
+   # 計畫中的增強功能
+   - 自動曝光和對比度調整
+   - 圖像旋轉校正
+   - 模糊檢測和銳化
+   - 食物邊界檢測
+   ```
+
+3. **多語言支援**:
+   ```python
+   # 多語言食物識別
+   - 中英日韓食物名稱對照
+   - 地區性食物資料庫整合
+   - 文化適應性調整
+   ```
 
 ## 🤝 貢獻指南
 
