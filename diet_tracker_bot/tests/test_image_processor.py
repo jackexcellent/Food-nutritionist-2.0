@@ -34,8 +34,16 @@ src_dir = current_dir.parent / "src"
 sys.path.insert(0, str(src_dir))
 
 # 導入要測試的模組
-from image_processor import ImageProcessor, process_image
-from utils import save_temp_image, format_file_size
+try:
+    from image_processor import ImageProcessor, process_image
+    from utils import save_temp_image, format_file_size
+except ImportError:
+    # 嘗試從不同路徑導入
+    import sys
+    sys.path.insert(0, str(current_dir.parent))
+    from src.image_processor import ImageProcessor, process_image
+    from src.utils import save_temp_image, format_file_size
+
 
 class TestImageProcessor:
     """圖像處理器類別的測試"""
