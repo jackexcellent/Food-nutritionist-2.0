@@ -39,6 +39,14 @@ except ImportError:
     AZURE_AVAILABLE = False
     logging.warning("Azure Computer Vision SDK 未安裝，請執行: pip install azure-cognitiveservices-vision-computervision")
 
+# Google Gemini imports
+try:
+    import google.generativeai as genai
+    GEMINI_AVAILABLE = True
+except ImportError:
+    GEMINI_AVAILABLE = False
+    logging.warning("Google Generative AI SDK 未安裝，請執行: pip install google-generativeai")
+
 # 導入專案共用工具
 current_dir = Path(__file__).parent
 project_root = current_dir.parent
@@ -59,7 +67,7 @@ class ImageProcessor:
     
     負責處理食物圖像識別的完整流程：
     1. 圖像預處理
-    2. Azure API呼叫
+    2. Azure/Google API呼叫
     3. 結果解析和過濾
     
     未來擴展：
@@ -71,6 +79,7 @@ class ImageProcessor:
     def __init__(self):
         """初始化圖像處理器"""
         self.azure_client = None
+        self.gemini_model = None
         self.max_image_size = (800, 600)  # 標準預處理尺寸
         self.enhancement_enabled = True   # 啟用圖像增強
         
@@ -79,6 +88,12 @@ class ImageProcessor:
             self._initialize_azure_client()
         else:
             logger.warning("Azure SDK 不可用，圖像識別功能將受限")
+        
+        # 初始化 Gemini Vision 模型
+        if GEMINI_AVAILABLE:
+            self._initialize_gemini_model()
+        else:
+            logger.warning("Gemini SDK 不可用，將無法使用進階食物識別")
     
     def _initialize_azure_client(self) -> None:
         """
@@ -109,6 +124,125 @@ class ImageProcessor:
         except Exception as e:
             handle_error(e, "初始化Azure Computer Vision客戶端", 
                         logger=logger, raise_error=False)
+    
+    def _initialize_gemini_model(self) -> None:
+        """
+        初始化 Google Gemini Vision 模型
+        
+        Gemini 具有更強大的視覺理解能力，特別適合識別具體的食物種類。
+        """
+        try:
+            gemini_key = os.getenv('GEMINI_KEY')
+            
+            if not gemini_key:
+                logger.error("Gemini API金鑰未設定")
+                return
+            
+            # 配置 Gemini API
+            genai.configure(api_key=gemini_key)
+            
+            # 使用 Gemini 2.0 Flash 模型 (支援視覺輸入)
+            self.gemini_model = genai.GenerativeModel('gemini-2.0-flash')
+            
+            logger.info("Gemini Vision 模型初始化成功")
+            
+        except Exception as e:
+            handle_error(e, "初始化 Gemini Vision 模型", 
+                        logger=logger, raise_error=False)
+    
+    def analyze_image_with_gemini(self, image_path: str) -> List[str]:
+        """
+        使用 Gemini Vision 進行詳細的食物識別
+        
+        Gemini 能夠識別具體的食物名稱，特別是亞洲食物。
+        
+        Args:
+            image_path (str): 圖像檔案路徑
+        
+        Returns:
+            List[str]: 識別出的具體食物名稱列表
+        """
+        if not self.gemini_model:
+            logger.error("Gemini模型未初始化")
+            return []
+        
+        try:
+            from PIL import Image
+            
+            # 載入圖像
+            img = Image.open(image_path)
+            
+            # 構建詳細的提示詞
+            prompt = """請仔細分析這張食物圖片，並列出圖片中所有可以看到的食物項目。
+
+要求：
+1. 請用中文和英文雙語列出每種食物
+2. 盡可能具體，例如：不要只說"豆腐"，要說"臭豆腐"或"油炸豆腐"
+3. 列出所有可見的配菜和醬料
+4. 如果有多個相同食物，請標注數量
+5. 格式：食物名稱（英文名稱）
+
+請按照這個格式回答，每行一個食物項目：
+- 食物名稱（English Name）
+"""
+            
+            # 發送請求
+            response = self.gemini_model.generate_content([prompt, img])
+            
+            if response and response.text:
+                logger.debug(f"Gemini 原始回應:\n{response.text}")
+                
+                # 解析響應文本
+                food_items = self._parse_gemini_response(response.text)
+                logger.info(f"✨ Gemini 識別出 {len(food_items)} 個具體食物")
+                
+                return food_items
+            else:
+                logger.warning("Gemini 未返回有效響應")
+                return []
+            
+        except Exception as e:
+            return handle_error(e, "Gemini Vision API 呼叫", 
+                              logger=logger, raise_error=False, default_return=[])
+    
+    def _parse_gemini_response(self, response_text: str) -> List[str]:
+        """
+        解析 Gemini 的響應文本，提取食物項目
+        
+        Args:
+            response_text (str): Gemini 返回的文本
+        
+        Returns:
+            List[str]: 解析出的食物項目列表
+        """
+        food_items = []
+        lines = response_text.strip().split('\n')
+        
+        # 過濾掉開頭的禮貌性回應或說明文字
+        skip_phrases = ['好的', '我來', '分析', '以下是', '讓我', '這張圖', '根據', '可以看到']
+        
+        for line in lines:
+            line = line.strip()
+            
+            # 跳過空行
+            if not line or len(line) < 3:
+                continue
+            
+            # 跳過禮貌性開頭(通常不含括號)
+            if any(phrase in line for phrase in skip_phrases) and '(' not in line:
+                continue
+            
+            # 移除項目符號
+            if line.startswith(('- ', '* ', '• ')):
+                line = line.lstrip('-*• ')
+            elif line.startswith(('1.', '2.', '3.', '4.', '5.', '6.', '7.', '8.', '9.')):
+                line = line.lstrip('0123456789. ')
+            
+            # 只保留包含食物描述的行(通常包含括號或中文食物名稱)
+            if line and (('(' in line and ')' in line) or any('\u4e00' <= c <= '\u9fff' for c in line)):
+                food_items.append(line)
+        
+        return food_items
     
     def preprocess_image(self, image_path: str) -> Optional[np.ndarray]:
         """
@@ -233,11 +367,15 @@ class ImageProcessor:
             return []
         
         try:
+            # 重置流位置到開頭
+            image_data.seek(0)
+            
             # 使用Azure Computer Vision API進行詳細的食物分析
             # 獲取多種視覺特徵以提供更完整的食物資訊
             analysis = self.azure_client.analyze_image_in_stream(
                 image_data,
-                visual_features=['Tags', 'Description', 'Categories', 'Objects']
+                visual_features=['Tags', 'Description', 'Categories', 'Objects'],
+                language='zh'  # 使用中文，有助於識別亞洲食物
                 # 注意：移除了details參數，因為Azure Computer Vision v3.2 API不支援'Food'作為details值
             )
             
@@ -327,14 +465,27 @@ class ImageProcessor:
         Returns:
             List[str]: 包含詳細資訊的食物標籤列表
         """
-        # 擴展的食物關鍵詞，包含更具體的食物類型
+        # 擴展的食物關鍵詞，包含更具體的食物類型和亞洲食物
         food_keywords = {
+            # 基本類別
             'food', 'dish', 'meal', 'cuisine', 'ingredient', 'fruit', 'vegetable',
             'meat', 'fish', 'bread', 'rice', 'pasta', 'soup', 'salad', 'dessert',
             'drink', 'beverage', 'snack', 'breakfast', 'lunch', 'dinner',
+            
+            # 具體食物
             'chicken', 'beef', 'pork', 'salmon', 'tuna', 'apple', 'banana',
             'orange', 'tomato', 'carrot', 'broccoli', 'potato', 'noodles',
-            'sandwich', 'pizza', 'burger', 'sushi', 'cake', 'cookie', 'cheese'
+            'sandwich', 'pizza', 'burger', 'sushi', 'cake', 'cookie', 'cheese',
+            
+            # 亞洲食物關鍵詞
+            'tofu', 'bean curd', 'soy', 'soybean', 'tempeh', 'edamame',
+            'fermented', 'pickled', 'kimchi', 'pickle', 'cabbage',
+            'dumpling', 'wonton', 'bun', 'roll', 'spring roll',
+            'fried', 'steamed', 'stir fry', 'stir-fry',
+            'asian', 'chinese', 'japanese', 'korean', 'taiwanese', 'thai',
+            'street food', 'vendor', 'hawker',
+            'seaweed', 'kelp', 'miso', 'wasabi', 'ginger', 'garlic',
+            'sauce', 'soy sauce', 'chili', 'spicy',
         }
         
         # 非食物關鍵詞，需要排除
@@ -535,8 +686,7 @@ class ImageProcessor:
         """
         從文字中提取食物名稱
         
-        使用簡單的關鍵詞匹配提取食物名稱。
-        未來可以使用更複雜的NLP技術。
+        使用擴展的關鍵詞匹配提取食物名稱，特別針對亞洲食物。
         
         Args:
             text (str): 要分析的文字
@@ -544,21 +694,43 @@ class ImageProcessor:
         Returns:
             List[str]: 提取的食物名稱列表
         """
-        # 常見食物關鍵詞列表（可擴展）
+        # 擴展的食物關鍵詞列表，包含中文和英文常見食物
         common_foods = {
+            # 基本食物
             'apple', 'banana', 'orange', 'rice', 'chicken', 'beef', 'pork',
             'fish', 'salmon', 'tuna', 'bread', 'pasta', 'noodles', 'soup',
             'salad', 'vegetables', 'broccoli', 'carrot', 'potato', 'tomato',
-            'cheese', 'milk', 'egg', 'tofu', 'beans', 'nuts'
+            'cheese', 'milk', 'egg', 'beans', 'nuts',
+            
+            # 亞洲食物 - 特別加強
+            'tofu', 'bean curd', 'fermented tofu', 'stinky tofu', '豆腐', '臭豆腐',
+            'kimchi', 'pickle', 'pickled', 'fermented', 'cabbage', '泡菜', '醃菜',
+            'dumpling', 'wonton', 'bun', 'steamed bun', '餃子', '包子', '饅頭',
+            'spring roll', 'egg roll', '春捲', '蛋捲',
+            'fried rice', 'congee', 'porridge', '炒飯', '粥',
+            'noodle soup', 'ramen', 'pho', '麵', '拉麵', '河粉',
+            'soy', 'soybean', 'edamame', '黃豆', '毛豆',
+            'seaweed', 'kelp', '海帶', '紫菜',
+            'miso', 'tempeh', '味噌', '天貝',
+            
+            # 醬料和調味料
+            'sauce', 'soy sauce', 'chili', 'garlic', 'ginger',
+            '醬油', '辣椒', '大蒜', '薑',
+            
+            # 街頭小吃
+            'street food', 'snack', 'fried food', '小吃', '炸物',
         }
         
         found_foods = []
-        words = text.split()
+        text_lower = text.lower()
         
-        for word in words:
-            clean_word = word.strip('.,!?()[]{}').lower()
-            if clean_word in common_foods:
-                found_foods.append(clean_word)
+        # 先嘗試匹配較長的片語（如 "stinky tofu"）
+        for food in sorted(common_foods, key=len, reverse=True):
+            if food in text_lower:
+                found_foods.append(food)
+        
+        # 去除重複
+        found_foods = list(dict.fromkeys(found_foods))
         
         return found_foods
     
@@ -732,23 +904,63 @@ def process_image(image_path: str) -> List[str]:
             logger.error("圖像預處理失敗")
             return []
         
-        # 將處理後的圖像轉換為bytes格式並包裝成類似檔案的物件
-        _, buffer = cv2.imencode('.jpg', processed_image)
-        image_bytes = buffer.tobytes()
+        # 初始化結果列表
+        all_food_items = []
         
-        # 將bytes包裝成BytesIO對象，讓Azure API能讀取
-        from io import BytesIO
-        image_stream = BytesIO(image_bytes)
-        
-        # 使用Azure API分析圖像
+        # === 方法 1: Azure Computer Vision API ===
+        # Azure 提供通用的視覺理解和場景描述
         if processor.azure_client:
-            food_list = processor.analyze_image_with_azure(image_stream)
+            logger.info("📊 使用 Azure Computer Vision API 進行分析...")
+            
+            # 將處理後的圖像轉換為bytes格式並包裝成類似檔案的物件
+            _, buffer = cv2.imencode('.jpg', processed_image)
+            image_bytes = buffer.tobytes()
+            
+            # 將bytes包裝成BytesIO對象，讓Azure API能讀取
+            from io import BytesIO
+            image_stream = BytesIO(image_bytes)
+            
+            azure_foods = processor.analyze_image_with_azure(image_stream)
+            all_food_items.extend(azure_foods)
+            logger.info(f"✅ Azure API 識別出 {len(azure_foods)} 個項目")
         else:
-            logger.warning("Azure客戶端不可用，返回空列表")
-            food_list = []
+            logger.warning("⚠️ Azure客戶端不可用")
         
-        logger.info(f"圖像處理完成，識別出 {len(food_list)} 個食物項目")
-        return food_list
+        # === 方法 2: Google Gemini Vision API ===
+        # Gemini 提供更詳細的食物識別，特別是亞洲食物
+        if processor.gemini_model:
+            logger.info("✨ 使用 Gemini Vision API 進行詳細食物識別...")
+            
+            # 保存預處理後的圖像到臨時檔案供 Gemini 使用
+            temp_image_path = save_temp_image(processed_image, "gemini_input.jpg")
+            
+            gemini_foods = processor.analyze_image_with_gemini(temp_image_path)
+            all_food_items.extend(gemini_foods)
+            logger.info(f"✅ Gemini API 識別出 {len(gemini_foods)} 個具體食物")
+        else:
+            logger.warning("⚠️ Gemini 模型不可用")
+        
+        # === 合併和去重 ===
+        # 移除重複項目，優先保留更詳細的描述
+        if all_food_items:
+            # 簡單去重(保持順序，Gemini 結果在後面，優先度更高)
+            seen = set()
+            unique_foods = []
+            
+            # 先處理Azure結果(通用描述)
+            for food in all_food_items:
+                food_lower = food.lower()
+                # 簡單的去重邏輯:如果包含相似的關鍵詞，跳過
+                if not any(existing in food_lower or food_lower in existing 
+                          for existing in seen):
+                    unique_foods.append(food)
+                    seen.add(food_lower)
+            
+            logger.info(f"🎯 最終識別出 {len(unique_foods)} 個不重複的食物項目")
+            return unique_foods
+        else:
+            logger.warning("未能識別出任何食物項目")
+            return []
         
     except Exception as e:
         return handle_error(e, f"處理圖像 {image_path}", 
