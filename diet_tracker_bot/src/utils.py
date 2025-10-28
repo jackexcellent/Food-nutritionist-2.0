@@ -16,6 +16,33 @@ from typing import Any, Optional, Callable, Union
 from functools import wraps
 import os
 from pathlib import Path
+from datetime import datetime, timedelta
+
+# ========== 簡易快取系統 (MVP) ==========
+# 全域字典快取，用於暫存常見食物的營養資訊
+# 
+# 設計說明：
+# - MVP 階段使用記憶體內的 dict 快取
+# - 鍵值: 食物名稱 (小寫)
+# - 值: {'calories': float, 'timestamp': datetime, 'source': str}
+#
+# 未來擴展計畫：
+# 1. 使用 Redis 替換記憶體快取 (支援分散式部署)
+# 2. 實作 TTL (Time-To-Live) 自動過期機制
+# 3. LRU (Least Recently Used) 快取淘汰策略
+# 4. 快取統計與監控 (命中率、大小等)
+# 5. 持久化快取到資料庫
+#
+# Redis 遷移範例:
+# import redis
+# cache = redis.Redis(host='localhost', port=6379, db=0)
+# cache.setex(f'nutrition:{food_name}', 3600, json.dumps(nutrition_data))
+
+_NUTRITION_CACHE: dict = {}
+
+# 快取設定
+CACHE_TTL_HOURS = 24  # 快取有效期（小時）
+CACHE_MAX_SIZE = 1000  # 最大快取項目數
 
 def setup_logging(log_level: str = "INFO", 
                   log_format: Optional[str] = None,
@@ -332,6 +359,127 @@ def create_project_directories() -> None:
     
     logger = logging.getLogger(__name__)
     logger.debug(f"確保項目目錄結構完整: {[str(d) for d in directories]}")
+
+def get_cached_nutrition(food_name: str) -> Optional[float]:
+    """
+    從快取中獲取食物的營養資訊
+    
+    Args:
+        food_name: 食物名稱（會自動轉為小寫）
+    
+    Returns:
+        Optional[float]: 熱量值（kcal），如果不在快取中或已過期則返回 None
+    
+    使用範例：
+        calories = get_cached_nutrition('apple')
+        if calories is None:
+            calories = query_from_database('apple')
+            set_cached_nutrition('apple', calories)
+    
+    未來擴展：
+    - 支援多種營養素（蛋白質、脂肪、碳水）
+    - Redis 快取整合
+    - 快取預熱機制
+    """
+    global _NUTRITION_CACHE
+    
+    cache_key = food_name.lower()
+    logger = logging.getLogger(__name__)
+    
+    if cache_key in _NUTRITION_CACHE:
+        cached_data = _NUTRITION_CACHE[cache_key]
+        
+        # 檢查快取是否過期
+        cache_age = datetime.now() - cached_data['timestamp']
+        if cache_age < timedelta(hours=CACHE_TTL_HOURS):
+            logger.debug(f"快取命中: {food_name} = {cached_data['calories']} kcal "
+                        f"(來源: {cached_data['source']}, "
+                        f"已快取 {cache_age.seconds // 3600} 小時)")
+            return cached_data['calories']
+        else:
+            # 快取已過期，移除
+            logger.debug(f"快取過期: {food_name} (已超過 {CACHE_TTL_HOURS} 小時)")
+            del _NUTRITION_CACHE[cache_key]
+    
+    logger.debug(f"快取未命中: {food_name}")
+    return None
+
+def set_cached_nutrition(food_name: str, calories: float, source: str = 'unknown') -> None:
+    """
+    將食物營養資訊存入快取
+    
+    Args:
+        food_name: 食物名稱（會自動轉為小寫）
+        calories: 熱量值（kcal）
+        source: 資料來源（如 'TFND', 'USDA', 'cache'）
+    
+    說明：
+    - 如果快取已滿，會自動清理最舊的項目
+    - 每次設定都會更新時間戳
+    
+    未來擴展：
+    - LRU 淘汰策略
+    - 快取大小監控
+    - 批次寫入 Redis
+    """
+    global _NUTRITION_CACHE
+    
+    cache_key = food_name.lower()
+    logger = logging.getLogger(__name__)
+    
+    # 檢查快取大小限制
+    if len(_NUTRITION_CACHE) >= CACHE_MAX_SIZE:
+        # 簡易清理策略：移除最舊的項目
+        # 未來可改為 LRU 策略
+        oldest_key = min(_NUTRITION_CACHE.keys(), 
+                        key=lambda k: _NUTRITION_CACHE[k]['timestamp'])
+        del _NUTRITION_CACHE[oldest_key]
+        logger.debug(f"快取已滿，移除最舊項目: {oldest_key}")
+    
+    # 存入快取
+    _NUTRITION_CACHE[cache_key] = {
+        'calories': calories,
+        'timestamp': datetime.now(),
+        'source': source
+    }
+    
+    logger.debug(f"快取已更新: {food_name} = {calories} kcal (來源: {source})")
+
+def get_cache_stats() -> dict:
+    """
+    獲取快取統計資訊
+    
+    Returns:
+        dict: 包含快取大小、命中率等統計資訊
+    
+    未來擴展：
+    - 命中率計算
+    - 記憶體使用統計
+    - 快取效能監控
+    """
+    global _NUTRITION_CACHE
+    
+    return {
+        'size': len(_NUTRITION_CACHE),
+        'max_size': CACHE_MAX_SIZE,
+        'ttl_hours': CACHE_TTL_HOURS,
+        'items': list(_NUTRITION_CACHE.keys())
+    }
+
+def clear_cache() -> None:
+    """
+    清空所有快取
+    
+    使用場景：
+    - 測試環境重置
+    - 手動刷新資料
+    - 記憶體清理
+    """
+    global _NUTRITION_CACHE
+    
+    _NUTRITION_CACHE.clear()
+    logger = logging.getLogger(__name__)
+    logger.info("快取已清空")
 
 # 模組級別的日誌器
 logger = logging.getLogger(__name__)
