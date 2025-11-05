@@ -20,19 +20,23 @@
 diet_tracker_bot/
 ├── src/                     # 核心程式碼
 │   ├── __init__.py         # 套件初始化
-│   ├── main.py             # 主程式入口點
-│   ├── utils.py            # 共用工具函數
-│   ├── image_processor.py  # 🆕 圖像處理模組 (階段1)
-│   └── nutrition_calculator.py  # 🆕 營養計算模組 (階段2)
+│   ├── main.py             # 主程式入口點 (CLI)
+│   ├── utils.py            # 共用工具函數 + 快取機制
+│   ├── image_processor.py  # 圖像處理模組 (階段1)
+│   ├── nutrition_calculator.py  # 營養計算模組 (階段2)
+│   └── data_storage.py     # ✨ 資料儲存模組 (階段4)
 ├── config/                  # 配置檔案
 │   └── .env                # 環境變數 (需要設定API金鑰)
 ├── data/                   # 資料檔案
 │   ├── tfnd_clean.jsonl    # 台灣食物營養資料庫
+│   ├── user_data.db        # ✨ SQLite 使用者資料庫 (階段4)
 │   └── cache/              # 快取資料 (自動生成)
 ├── tests/                  # 測試檔案
 │   ├── __init__.py
-│   ├── test_image_processor.py  # 🆕 圖像處理測試 (階段1)
-│   └── test_nutrition_calculator.py  # 🆕 營養計算測試 (階段2)
+│   ├── test_image_processor.py      # 圖像處理測試 (階段1)
+│   ├── test_nutrition_calculator.py # 營養計算測試 (階段2)
+│   ├── test_integration.py          # 系統整合測試 (階段3)
+│   └── test_data_storage.py         # ✨ 資料儲存測試 (階段4)
 ├── docs/                   # 文件資料夾
 │   └── README.md           # 專案說明文件
 ├── logs/                   # 日誌檔案 (自動生成)
@@ -46,13 +50,14 @@ diet_tracker_bot/
 
 ```
 main.py
-├── utils.py (日誌、錯誤處理、圖像儲存)
-├── image_processor.py (🆕 圖像識別與食物偵測 - 階段1)
-├── nutrition_calculator.py (🆕 營養計算與資料庫查詢 - 階段2)
+├── utils.py (日誌、錯誤處理、圖像儲存、快取機制)
+├── image_processor.py (圖像識別與食物偵測 - 階段1)
+├── nutrition_calculator.py (營養計算與資料庫查詢 - 階段2)
+├── data_storage.py (✨ SQLite 資料儲存 - 階段4)
 ├── bot/ (未來實現)
 │   ├── discord_bot.py
 │   └── commands.py
-├── database/ (未來實現)
+├── database/ (未來實現 - MongoDB)
 │   ├── models.py
 │   └── repository.py
 └── ai/ (未來實現)
@@ -354,8 +359,17 @@ pytest tests/test_utils.py
 # 執行測試並生成覆蓋率報告
 pytest --cov=src tests/
 
-# 🆕 執行圖像處理測試（詳細輸出）
+# 執行圖像處理測試（詳細輸出）
 pytest tests/test_image_processor.py -v --tb=short
+
+# 執行營養計算測試 (階段2)
+pytest tests/test_nutrition_calculator.py -v
+
+# 執行系統整合測試 (階段3)
+pytest tests/test_integration.py -v
+
+# ✨ 執行資料儲存測試 (階段4, 26項測試)
+pytest tests/test_data_storage.py -v
 ```
 
 ### 🆕 圖像處理測試指南
@@ -698,7 +712,432 @@ print(f"快取項目: {stats['items']}")
 
 ---
 
-## 📚 開發指南
+## � 階段 4: 資料儲存與持久化
+
+### 功能概述
+
+實現 SQLite 資料庫用於儲存用戶的飲食記錄，並提供完整的 MongoDB 遷移文檔，為未來的雲端部署做準備。
+
+### 資料庫架構
+
+#### SQLite Schema (MVP)
+
+```sql
+-- meals 表：儲存用戶飲食記錄
+CREATE TABLE meals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,  -- 記錄ID
+    user_id TEXT NOT NULL,                 -- 使用者ID (Discord ID)
+    date TEXT NOT NULL,                    -- 飲食日期 (ISO 8601格式)
+    foods TEXT NOT NULL,                   -- 食物列表 (JSON格式)
+    calories REAL NOT NULL,                -- 總熱量 (kcal)
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))  -- 記錄建立時間
+);
+
+-- 索引：優化按用戶和日期的查詢效能
+CREATE INDEX idx_meals_user_date ON meals(user_id, date DESC);
+```
+
+**資料範例:**
+
+```json
+{
+  "id": 1,
+  "user_id": "discord_user_123456",
+  "date": "2024-10-28T12:30:00",
+  "foods": {
+    "apple": 52.0,
+    "chicken": 165.0,
+    "rice": 130.0
+  },
+  "calories": 347.0,
+  "created_at": "2024-10-28T12:31:45"
+}
+```
+
+### 核心功能 (`src/data_storage.py`)
+
+#### 1. 資料庫初始化
+
+```python
+from src.data_storage import init_database
+
+# 初始化資料庫（自動創建表和索引）
+init_database()
+```
+
+#### 2. 儲存飲食記錄
+
+```python
+from src.data_storage import store_meal
+
+# 儲存記錄
+user_id = "discord_user_123456"
+foods = {"apple": 52.0, "banana": 89.0}
+calories = sum(foods.values())
+
+record_id = store_meal(user_id, foods, calories)
+print(f"記錄已儲存，ID: {record_id}")
+
+# 指定日期儲存
+from datetime import datetime
+custom_date = datetime(2024, 10, 27, 18, 30).isoformat()
+record_id = store_meal(user_id, foods, calories, date=custom_date)
+```
+
+#### 3. 查詢歷史記錄
+
+```python
+from src.data_storage import get_history
+
+# 查詢最近 7 天的記錄（默認）
+history = get_history(user_id)
+
+# 查詢最近 30 天的記錄
+history = get_history(user_id, days=30)
+
+# 記錄格式: (id, date, foods_dict, calories, created_at)
+for record in history:
+    print(f"日期: {record[1]}")
+    print(f"食物: {record[2]}")
+    print(f"熱量: {record[3]} kcal")
+    print("---")
+```
+
+#### 4. 查詢單筆記錄
+
+```python
+from src.data_storage import get_meal_by_id
+
+# 根據 ID 查詢
+meal = get_meal_by_id(record_id)
+
+if meal:
+    print(f"用戶: {meal[1]}")
+    print(f"日期: {meal[2]}")
+    print(f"食物: {meal[3]}")
+    print(f"熱量: {meal[4]} kcal")
+```
+
+#### 5. 刪除記錄
+
+```python
+from src.data_storage import delete_meal
+
+# 刪除指定記錄
+success = delete_meal(record_id)
+
+if success:
+    print("記錄已刪除")
+else:
+    print("記錄不存在或刪除失敗")
+```
+
+#### 6. 統計功能
+
+```python
+from src.data_storage import get_statistics
+
+# 獲取最近 7 天的統計
+stats = get_statistics(user_id, days=7)
+
+print(f"總飲食次數: {stats['total_meals']}")
+print(f"總熱量: {stats['total_calories']} kcal")
+print(f"平均熱量: {stats['avg_calories']:.2f} kcal/餐")
+print("最常見食物:")
+for food, count in stats['most_common_foods']:
+    print(f"  • {food}: {count} 次")
+```
+
+#### 7. 資料匯出
+
+```python
+from src.data_storage import export_to_json
+
+# 匯出所有資料為 JSON
+output_path = export_to_json("backup/meals_backup.json")
+print(f"資料已匯出至: {output_path}")
+```
+
+### MongoDB 遷移指南
+
+當需要擴展到雲端部署時，可以遷移至 MongoDB：
+
+#### 安裝 MongoDB 驅動
+
+```bash
+pip install pymongo
+```
+
+#### MongoDB Schema
+
+```python
+# meals 集合（Collection）
+{
+    "_id": ObjectId("..."),
+    "user_id": "discord_user_123456",
+    "date": ISODate("2024-10-28T12:30:00Z"),
+    "foods": {
+        "apple": 52.0,
+        "chicken": 165.0,
+        "rice": 130.0
+    },
+    "calories": 347.0,
+    "created_at": ISODate("2024-10-28T12:31:45Z")
+}
+```
+
+#### MongoDB 連接設定
+
+```python
+from pymongo import MongoClient
+
+# 連接 MongoDB
+client = MongoClient("mongodb://localhost:27017/")
+db = client["diet_tracker"]
+meals_collection = db["meals"]
+
+# 創建索引
+meals_collection.create_index([("user_id", 1), ("date", -1)])
+meals_collection.create_index("created_at", expireAfterSeconds=31536000)  # 1年TTL
+```
+
+#### 資料遷移函數
+
+```python
+from src.data_storage import get_db_connection
+from pymongo import MongoClient
+
+def migrate_to_mongodb(mongo_uri="mongodb://localhost:27017/"):
+    """將 SQLite 資料遷移至 MongoDB"""
+    # 連接 MongoDB
+    client = MongoClient(mongo_uri)
+    db = client["diet_tracker"]
+    meals_collection = db["meals"]
+
+    # 讀取 SQLite 資料
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM meals")
+        rows = cursor.fetchall()
+
+        for row in rows:
+            # 轉換為 MongoDB 文檔
+            document = {
+                "user_id": row['user_id'],
+                "date": row['date'],
+                "foods": json.loads(row['foods']),
+                "calories": row['calories'],
+                "created_at": row['created_at']
+            }
+
+            # 插入 MongoDB
+            meals_collection.insert_one(document)
+
+    print(f"成功遷移 {len(rows)} 筆記錄")
+```
+
+#### MongoDB 操作範例
+
+每個 `data_storage.py` 函數的 docstring 都包含對應的 MongoDB 實現：
+
+```python
+# 儲存記錄（MongoDB 版本）
+meal_doc = {
+    "user_id": user_id,
+    "date": datetime.now(),
+    "foods": foods_dict,
+    "calories": calories,
+    "created_at": datetime.now()
+}
+result = meals_collection.insert_one(meal_doc)
+meal_id = result.inserted_id
+
+# 查詢歷史（MongoDB 版本）
+from datetime import datetime, timedelta
+start_date = datetime.now() - timedelta(days=7)
+meals = meals_collection.find({
+    "user_id": user_id,
+    "date": {"$gte": start_date}
+}).sort("date", -1)
+
+# 統計查詢（MongoDB 版本）
+pipeline = [
+    {"$match": {"user_id": user_id, "date": {"$gte": start_date}}},
+    {"$group": {
+        "_id": None,
+        "total_meals": {"$sum": 1},
+        "total_calories": {"$sum": "$calories"},
+        "avg_calories": {"$avg": "$calories"}
+    }}
+]
+stats = list(meals_collection.aggregate(pipeline))
+```
+
+### 資料流程圖
+
+```
+┌──────────────┐
+│   使用者     │
+│  上傳圖像    │
+└──────┬───────┘
+       │
+       ▼
+┌────────────────────────────────────┐
+│ 階段 1-3: 圖像 → 食物 → 熱量       │
+│ (image_processor + nutrition_calc)  │
+└──────────────┬─────────────────────┘
+               │ {'apple': 52.0, 'banana': 89.0}
+               ▼
+┌────────────────────────────────────┐
+│  階段 4: 資料儲存 (data_storage)   │
+├────────────────────────────────────┤
+│  store_meal(user_id, foods, 141.0) │
+│         ↓                          │
+│  SQLite Database                   │
+│  data/user_data.db                 │
+│         ↓                          │
+│  INSERT INTO meals                 │
+│  (user_id, date, foods, calories)  │
+└────────────────────────────────────┘
+       │
+       ▼
+┌────────────────────────────────────┐
+│  查詢與統計功能                    │
+├────────────────────────────────────┤
+│  • get_history(user_id, days=7)    │
+│    → 最近 N 天飲食記錄             │
+│                                    │
+│  • get_statistics(user_id, days=7) │
+│    → 總餐數、平均熱量、常見食物    │
+│                                    │
+│  • export_to_json(path)            │
+│    → 資料備份與遷移                │
+└────────────────────────────────────┘
+```
+
+### 測試 (`tests/test_data_storage.py`)
+
+完整的資料儲存測試涵蓋：
+
+```bash
+# 運行所有資料儲存測試（26 項測試）
+pytest tests/test_data_storage.py -v
+
+# 測試類別分類
+pytest tests/test_data_storage.py::TestDatabaseConnection -v      # 資料庫連接測試
+pytest tests/test_data_storage.py::TestStoreMeal -v               # 儲存功能測試
+pytest tests/test_data_storage.py::TestGetHistory -v              # 歷史查詢測試
+pytest tests/test_data_storage.py::TestGetStatistics -v           # 統計功能測試
+pytest tests/test_data_storage.py::TestIntegration -v             # 整合測試
+
+# 測試特定功能
+pytest tests/test_data_storage.py::TestStoreMeal::test_store_meal_json_encoding -v
+pytest tests/test_data_storage.py::TestGetHistory::test_get_history_order -v
+```
+
+**測試涵蓋範圍：**
+
+- ✅ 資料庫連接與初始化
+- ✅ Schema 驗證（表結構、欄位、索引）
+- ✅ 儲存功能（基本、指定日期、JSON 編碼、參數驗證）
+- ✅ 歷史查詢（默認/自定義天數、排序、空結果、參數驗證）
+- ✅ 單筆記錄查詢（成功、不存在）
+- ✅ 刪除功能（成功、不存在）
+- ✅ 統計功能（基本統計、最常見食物、空資料）
+- ✅ JSON 匯出（檔案生成、內容驗證）
+- ✅ 錯誤處理（連接錯誤、無效 JSON）
+- ✅ 完整工作流程整合測試
+
+### 效能優化建議
+
+#### SQLite 優化
+
+```sql
+-- 啟用 WAL 模式（提升並發效能）
+PRAGMA journal_mode = WAL;
+
+-- 增加快取大小
+PRAGMA cache_size = -64000;  -- 64MB
+
+-- 啟用記憶體映射 I/O
+PRAGMA mmap_size = 268435456;  -- 256MB
+```
+
+#### MongoDB 索引優化
+
+```python
+# 複合索引優化查詢
+meals_collection.create_index([
+    ("user_id", 1),
+    ("date", -1),
+    ("calories", -1)
+])
+
+# 文字搜索索引（未來擴展）
+meals_collection.create_index([("foods", "text")])
+
+# TTL 索引自動清理舊資料
+meals_collection.create_index(
+    "created_at",
+    expireAfterSeconds=31536000  # 保留 1 年資料
+)
+```
+
+### 資料備份與恢復
+
+#### SQLite 備份
+
+```bash
+# 使用 SQLite CLI 備份
+sqlite3 data/user_data.db ".backup backup/user_data_backup.db"
+
+# 使用 Python 備份
+python -c "from src.data_storage import export_to_json; export_to_json('backup/meals.json')"
+```
+
+#### MongoDB 備份
+
+```bash
+# 使用 mongodump 備份
+mongodump --db diet_tracker --collection meals --out backup/
+
+# 恢復資料
+mongorestore --db diet_tracker backup/diet_tracker/
+```
+
+### 安全性考量
+
+1. **SQL Injection 防護**：使用參數化查詢
+
+   ```python
+   # ✅ 安全：使用參數化查詢
+   cursor.execute("SELECT * FROM meals WHERE user_id = ?", (user_id,))
+
+   # ❌ 危險：字串拼接
+   cursor.execute(f"SELECT * FROM meals WHERE user_id = '{user_id}'")
+   ```
+
+2. **MongoDB Injection 防護**：使用驗證
+
+   ```python
+   # ✅ 安全：驗證輸入
+   if not isinstance(user_id, str) or not user_id:
+       raise ValueError("Invalid user_id")
+
+   meals_collection.find({"user_id": user_id})
+   ```
+
+3. **資料加密**（生產環境）：
+   ```python
+   # 加密敏感欄位
+   from cryptography.fernet import Fernet
+   cipher = Fernet(encryption_key)
+   encrypted_data = cipher.encrypt(data.encode())
+   ```
+
+---
+
+## �📚 開發指南
 
 ### 程式碼風格
 
@@ -742,8 +1181,12 @@ except Exception as e:
 - [x] 🆕 系統整合與 CLI 介面 - 階段 3
 - [x] 🆕 快取機制實現 - 階段 3
 - [x] 🆕 端到端整合測試 - 階段 3
+- [x] ✨ SQLite 資料儲存模組 - 階段 4
+- [x] ✨ CRUD 操作與歷史查詢 - 階段 4
+- [x] ✨ 統計功能與資料匯出 - 階段 4
+- [x] ✨ MongoDB 遷移文檔 - 階段 4
 - [ ] Discord Bot 基礎功能
-- [ ] 基本資料儲存
+- [ ] Discord Bot 與資料庫整合
 
 ### Phase 2: 功能增強
 
@@ -874,6 +1317,6 @@ except Exception as e:
 
 ---
 
-**版本**: 1.0.0 (MVP)  
-**最後更新**: 2025-10-22  
+**版本**: 1.1.0 (MVP - 資料持久化完成)  
+**最後更新**: 2024-10-28  
 **開發團隊**: Food Nutritionist Team

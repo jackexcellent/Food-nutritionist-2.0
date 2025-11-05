@@ -909,22 +909,22 @@ def process_image(image_path: str) -> List[str]:
         
         # === 方法 1: Azure Computer Vision API ===
         # Azure 提供通用的視覺理解和場景描述
-        if processor.azure_client:
-            logger.info("📊 使用 Azure Computer Vision API 進行分析...")
+        # if processor.azure_client:
+        #     logger.info("📊 使用 Azure Computer Vision API 進行分析...")
             
-            # 將處理後的圖像轉換為bytes格式並包裝成類似檔案的物件
-            _, buffer = cv2.imencode('.jpg', processed_image)
-            image_bytes = buffer.tobytes()
+        #     # 將處理後的圖像轉換為bytes格式並包裝成類似檔案的物件
+        #     _, buffer = cv2.imencode('.jpg', processed_image)
+        #     image_bytes = buffer.tobytes()
             
-            # 將bytes包裝成BytesIO對象，讓Azure API能讀取
-            from io import BytesIO
-            image_stream = BytesIO(image_bytes)
+        #     # 將bytes包裝成BytesIO對象，讓Azure API能讀取
+        #     from io import BytesIO
+        #     image_stream = BytesIO(image_bytes)
             
-            azure_foods = processor.analyze_image_with_azure(image_stream)
-            all_food_items.extend(azure_foods)
-            logger.info(f"✅ Azure API 識別出 {len(azure_foods)} 個項目")
-        else:
-            logger.warning("⚠️ Azure客戶端不可用")
+        #     azure_foods = processor.analyze_image_with_azure(image_stream)
+        #     all_food_items.extend(azure_foods)
+        #     logger.info(f"✅ Azure API 識別出 {len(azure_foods)} 個項目")
+        # else:
+        #     logger.warning("⚠️ Azure客戶端不可用")
         
         # === 方法 2: Google Gemini Vision API ===
         # Gemini 提供更詳細的食物識別，特別是亞洲食物
