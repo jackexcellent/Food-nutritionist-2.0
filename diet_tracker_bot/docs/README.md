@@ -20,7 +20,8 @@
 diet_tracker_bot/
 ├── src/                     # 核心程式碼
 │   ├── __init__.py         # 套件初始化
-│   ├── main.py             # 主程式入口點 (CLI)
+│   ├── main.py             # 主程式入口點 (Discord Bot + CLI)
+│   ├── discord_bot.py      # 🤖 Discord 機器人模組 (階段6)
 │   ├── utils.py            # 共用工具函數 + 快取機制
 │   ├── image_processor.py  # 圖像處理模組 (階段1)
 │   ├── nutrition_calculator.py  # 營養計算模組 (階段2)
@@ -38,7 +39,8 @@ diet_tracker_bot/
 │   ├── test_nutrition_calculator.py # 營養計算測試 (階段2)
 │   ├── test_integration.py          # 系統整合測試 (階段3)
 │   ├── test_data_storage.py         # 資料儲存測試 (階段4)
-│   └── test_recommendation_engine.py # ✨ AI 推薦引擎測試 (階段5)
+│   ├── test_recommendation_engine.py # ✨ AI 推薦引擎測試 (階段5)
+│   └── test_discord_bot.py          # 🤖 Discord Bot 測試 (階段6)
 ├── docs/                   # 文件資料夾
 │   └── README.md           # 專案說明文件
 ├── logs/                   # 日誌檔案 (自動生成)
@@ -375,6 +377,9 @@ pytest tests/test_data_storage.py -v
 
 # 🧠 執行 AI 推薦引擎測試 (階段5)
 pytest tests/test_recommendation_engine.py -v
+
+# 🤖 執行 Discord Bot 測試 (階段6)
+pytest tests/test_discord_bot.py -v
 ```
 
 ### 🆕 圖像處理測試指南
@@ -1368,6 +1373,335 @@ pytest tests/test_recommendation_engine.py::TestPromptTemplates -v         # Pro
 
 ---
 
+## 🤖 階段 6: Discord Bot 整合 (MVP 完成)
+
+**整合所有系統組件，提供完整的 Discord 機器人用戶體驗。**
+
+### Discord Bot 架構
+
+```
+Discord Bot Integration Flow
+───────────────────────────────
+
+👤 用戶上傳食物圖片 + /track
+          │
+          ▼
+┌─────────────────────────────────┐
+│ Discord Bot (discord_bot.py)    │
+├─────────────────────────────────┤
+│ • 附件驗證 (圖片格式/大小)      │
+│ • 臨時檔案管理                  │
+│ • 用戶 ID 管理 (ctx.author.id)  │
+│ • 進度訊息更新                  │
+└──────────┬──────────────────────┘
+           │
+           ▼
+┌─────────────────────────────────┐
+│ 完整 MVP Pipeline               │
+├─────────────────────────────────┤
+│ 1. image_processor.process_image │
+│ 2. nutrition_calculator.get_nutrition │
+│ 3. data_storage.store_meal      │
+│ 4. recommendation_engine.get_recommendation │
+└──────────┬──────────────────────┘
+           │
+           ▼
+┌─────────────────────────────────┐
+│ 結構化回應 (Discord Embed)       │
+├─────────────────────────────────┤
+│ ✅ 飲食分析完成                 │
+│ 🔍 識別結果: 蘋果、香蕉         │
+│ 📊 營養分析: [詳細營養資訊]     │
+│ 🔥 總熱量: 141 kcal            │
+│ 🤖 AI 個人化建議: [3項建議]     │
+│ 📝 記錄 ID: #1001              │
+└─────────────────────────────────┘
+```
+
+### 核心功能實現
+
+#### 1. Discord Bot 初始化 (`src/discord_bot.py`)
+
+```python
+import discord
+from discord.ext import commands
+
+class DietTrackerBot(commands.Bot):
+    def __init__(self):
+        intents = discord.Intents.default()
+        intents.message_content = True  # 需要讀取訊息內容
+
+        super().__init__(
+            command_prefix='/',
+            intents=intents,
+            help_command=None
+        )
+
+        self.stats = {
+            'total_tracks': 0,
+            'successful_analyses': 0,
+            'errors': 0,
+            'start_time': datetime.now()
+        }
+
+    async def on_ready(self):
+        print(f'✅ 機器人已上線: {self.user}')
+        await self.change_presence(
+            activity=discord.Activity(
+                type=discord.ActivityType.watching,
+                name="你的飲食健康 | /track 開始追蹤"
+            )
+        )
+```
+
+#### 2. /track 命令實現
+
+```python
+@bot.command(name='track')
+async def track_food(ctx: commands.Context):
+    """MVP 核心功能 - 食物圖片追蹤"""
+
+    # 1. 驗證附件
+    if not ctx.message.attachments:
+        await ctx.send("📷 請上傳食物圖片來開始分析！")
+        return
+
+    # 2. 檔案驗證
+    attachment = ctx.message.attachments[0]
+    if not _is_valid_image_file(attachment.filename):
+        await ctx.send("❌ 請上傳有效的圖片檔案 (jpg, png, etc.)")
+        return
+
+    # 3. 進度追蹤
+    processing_msg = await ctx.send("🔄 正在分析您的食物圖片...")
+
+    try:
+        # 4. 完整 Pipeline 執行
+        user_id = str(ctx.author.id)
+
+        # 步驟 1: 食物識別
+        await processing_msg.edit(content="🔄 步驟 1/4: 識別食物中...")
+        foods = image_processor.process_image(temp_path)
+
+        # 步驟 2: 營養分析
+        await processing_msg.edit(content="🔄 步驟 2/4: 計算營養成分...")
+        nutrition_data = nutrition_calculator.get_nutrition(foods)
+
+        # 步驟 3: 儲存記錄
+        await processing_msg.edit(content="🔄 步驟 3/4: 儲存飲食記錄...")
+        meal_id = data_storage.store_meal(user_id, food_dict, total_calories)
+
+        # 步驟 4: AI 推薦
+        await processing_msg.edit(content="🔄 步驟 4/4: 生成個人化建議...")
+        recommendation = recommendation_engine.get_recommendation(user_id)
+
+        # 5. 格式化並發送結果
+        response = _format_track_response(foods, nutrition_data, total_calories, recommendation, meal_id)
+        await processing_msg.edit(content=response)
+
+    except Exception as e:
+        await processing_msg.edit(content="❌ 處理過程中發生錯誤，請稍後再試。")
+```
+
+#### 3. 回應格式化
+
+```python
+def _format_track_response(foods, nutrition_data, total_calories, recommendation, meal_id):
+    """格式化追蹤結果為用戶友好的訊息"""
+
+    food_list = "、".join(foods) if foods else "未識別"
+
+    # 營養詳情
+    nutrition_details = []
+    for food_name, data in nutrition_data.items():
+        calories = data.get('calories', 0)
+        protein = data.get('protein', 0)
+        carbs = data.get('carbs', 0)
+        fat = data.get('fat', 0)
+
+        nutrition_details.append(
+            f"• **{food_name}**: {calories:.0f} kcal "
+            f"(蛋白質 {protein:.1f}g, 碳水 {carbs:.1f}g, 脂肪 {fat:.1f}g)"
+        )
+
+    # AI 推薦摘要
+    recommendation_summary = _extract_recommendation_summary(recommendation)
+
+    return f"""✅ **飲食分析完成！**
+
+🔍 **識別結果**: {food_list}
+
+📊 **營養分析**:
+{chr(10).join(nutrition_details)}
+
+🔥 **總熱量**: {total_calories:.0f} kcal
+
+🤖 **AI 個人化建議**:
+{recommendation_summary}
+
+📝 **記錄 ID**: #{meal_id} | 使用 `/history` 查看完整記錄"""
+```
+
+### Discord Bot 設定指南
+
+#### 1. 建立 Discord Bot
+
+1. **前往 Discord Developer Portal**:
+
+   - 訪問 https://discord.com/developers/applications
+   - 登入您的 Discord 帳號
+
+2. **建立新應用程式**:
+
+   ```
+   → 點擊 "New Application"
+   → 輸入機器人名稱: "Diet Tracker Bot"
+   → 點擊 "Create"
+   ```
+
+3. **設定機器人**:
+
+   ```
+   → 左側選單點擊 "Bot"
+   → 點擊 "Add Bot"
+   → 確認 "Yes, do it!"
+   ```
+
+4. **獲取 Bot Token**:
+
+   ```
+   → 在 Bot 頁面點擊 "Copy" 複製 Token
+   → 將 Token 添加到 config/.env 文件中:
+     DISCORD_TOKEN=your_bot_token_here
+   ```
+
+5. **設定機器人權限**:
+   ```
+   必要權限:
+   ✅ Read Messages          (讀取訊息)
+   ✅ Send Messages          (發送訊息)
+   ✅ Read Message History   (讀取訊息歷史)
+   ✅ Attach Files          (附加檔案)
+   ✅ Use Slash Commands    (使用斜線命令，未來功能)
+   ```
+
+#### 2. 邀請機器人到伺服器
+
+1. **生成邀請連結**:
+
+   ```
+   → Developer Portal → OAuth2 → URL Generator
+   → Scopes: 選擇 "bot"
+   → Bot Permissions: 選擇上述必要權限
+   → 複製生成的 URL
+   ```
+
+2. **邀請步驟**:
+   ```
+   → 開啟邀請連結
+   → 選擇要邀請的伺服器
+   → 確認權限設定
+   → 點擊 "Authorize" 授權
+   ```
+
+### 本地運行指南
+
+#### 1. Discord Bot 模式 (預設)
+
+```bash
+# 啟動完整的 Discord 機器人
+python src/main.py
+
+# 或者使用模組執行
+python -m src.main
+
+# 機器人將顯示以下資訊:
+# 🤖 啟動 Discord 飲食追蹤機器人...
+# 📝 使用 /track 命令開始追蹤飲食
+# 🔗 邀請機器人到您的伺服器並開始使用！
+# ⚠️  按 Ctrl+C 停止機器人
+```
+
+#### 2. CLI 測試模式
+
+```bash
+# 使用 CLI 模式測試功能
+python src/main.py --cli --image path/to/food_image.jpg
+
+# CLI 模式參數
+python src/main.py --cli --image test.jpg --user test_user --debug
+```
+
+#### 3. 使用 Discord Bot
+
+1. **在 Discord 伺服器中**:
+
+   ```
+   /track  # 輸入命令
+   [上傳食物圖片]  # 同時上傳圖片
+   ```
+
+2. **機器人回應流程**:
+   ```
+   🔄 正在分析您的食物圖片...
+   🔄 步驟 1/4: 識別食物中...
+   🔄 步驟 2/4: 計算營養成分...
+   🔄 步驟 3/4: 儲存飲食記錄...
+   🔄 步驟 4/4: 生成個人化建議...
+   ✅ 飲食分析完成！ [詳細結果]
+   ```
+
+### 測試 (`tests/test_discord_bot.py`)
+
+完整的 Discord Bot 測試涵蓋：
+
+```bash
+# 運行所有 Discord Bot 測試
+pytest tests/test_discord_bot.py -v
+
+# 測試分類運行
+pytest tests/test_discord_bot.py::TestTrackCommand -v          # /track 命令測試
+pytest tests/test_discord_bot.py::TestDietTrackerBot -v       # 機器人核心測試
+pytest tests/test_discord_bot.py::TestUtilityFunctions -v     # 輔助函數測試
+pytest tests/test_discord_bot.py::TestIntegration -v          # 整合測試
+```
+
+**測試涵蓋範圍：**
+
+- ✅ 機器人初始化與配置測試
+- ✅ /track 命令完整流程測試
+- ✅ 圖片附件處理與驗證
+- ✅ 錯誤處理與用戶反饋
+- ✅ 統計功能與管理命令
+- ✅ 輔助函數與格式化
+- ✅ Mock 整合測試 (避免真實 Discord API)
+- ✅ 異常處理與容錯機制
+
+#### 未來擴展命令架構
+
+```python
+# 預留的未來命令 (架構已準備)
+
+@bot.command(name='history')
+async def view_history(ctx, days: int = 7):
+    """查看飲食歷史記錄"""
+    # 實現將在後續版本添加
+
+@bot.command(name='stats')
+async def nutrition_stats(ctx):
+    """營養統計報告"""
+    # 實現將在後續版本添加
+
+@bot.command(name='profile')
+async def user_profile(ctx):
+    """個人檔案設定"""
+    # 實現將在後續版本添加
+```
+
+**MVP Discord Bot 已完成！** 🎉
+
+---
+
 ## �📚 開發指南
 
 ### 程式碼風格
@@ -1419,8 +1753,10 @@ except Exception as e:
 - [x] 🧠 AI 推薦引擎 (Gemini LLM) - 階段 5
 - [x] 🧠 結構化 Prompt 模板 - 階段 5
 - [x] 🧠 規則型 Fallback 機制 - 階段 5
-- [ ] Discord Bot 基礎功能
-- [ ] Discord Bot 與資料庫整合
+- [x] 🤖 Discord Bot 核心功能 - 階段 6
+- [x] 🤖 /track 命令整合 - 階段 6
+- [x] 🤖 圖片附件處理 - 階段 6
+- [x] 🤖 錯誤處理與用戶反饋 - 階段 6
 
 ### Phase 2: 功能增強
 

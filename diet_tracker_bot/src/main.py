@@ -2,21 +2,29 @@
 Diet Tracker Bot - 主程式入口點
 ================================
 
-這是Discord飲食追蹤機器人的主要入口點。
-目前為MVP版本，提供CLI介面來測試圖像到熱量的完整流程。
+這是Discord飲食追蹤機器人的主要入口點，支援兩種運行模式：
+
+1. **Discord Bot 模式** (預設)：啟動完整的 Discord 機器人
+2. **CLI 測試模式**：命令列介面，用於開發和測試
 
 MVP功能：
-1. CLI入口：接受圖像路徑
-2. 圖像處理：使用Azure Computer Vision識別食物
-3. 營養計算：從TFND資料庫和USDA API查詢熱量
-4. 結果輸出：顯示食物清單、各項熱量、總熱量
+1. Discord Bot：完整的機器人界面，支援 /track 命令
+2. CLI 測試：直接測試圖像到熱量的完整流程
+3. 圖像處理：使用Azure Computer Vision識別食物
+4. 營養計算：從TFND資料庫和USDA API查詢熱量
+5. 資料儲存：SQLite 資料庫持久化
+6. AI 推薦：Google Gemini LLM 個人化建議
+
+使用方式：
+- Discord Bot: python src/main.py
+- CLI 測試: python src/main.py --cli --image path/to/image.jpg
 
 未來擴展計畫：
-1. 完整的Discord Bot實現
+1. 更多 Discord 命令 (/history, /stats, /profile)
 2. 份量識別與計算
-3. 用戶歷史追蹤
-4. AI推薦系統
-5. 多語言支援
+3. 進階 AI 推薦功能
+4. 多語言支援
+5. Web Dashboard
 """
 
 import os
@@ -472,6 +480,124 @@ def run_cli():
             logger.debug(f"詳細錯誤:\n{traceback.format_exc()}")
         return 1
 
+def run_discord_bot():
+    """啟動 Discord 機器人模式"""
+    try:
+        from discord_bot import run_bot
+        
+        print("🤖 啟動 Discord 飲食追蹤機器人...")
+        print("📝 使用 /track 命令開始追蹤飲食")
+        print("🔗 邀請機器人到您的伺服器並開始使用！")
+        print("⚠️  按 Ctrl+C 停止機器人\n")
+        
+        # 初始化資料庫
+        init_database()
+        
+        # 啟動機器人
+        run_bot()
+        
+    except ImportError as e:
+        print(f"❌ 無法載入 Discord Bot 模組: {e}")
+        print("💡 請安裝 discord.py: pip install discord.py")
+        return 1
+    except KeyboardInterrupt:
+        print("\n👋 機器人已停止")
+        return 0
+    except Exception as e:
+        print(f"❌ Discord Bot 啟動失敗: {e}")
+        return 1
+
+
+def main():
+    """主函數 - 決定運行模式"""
+    import argparse
+    
+    parser = argparse.ArgumentParser(
+        description="Discord 飲食追蹤機器人",
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    
+    # 添加模式選擇參數
+    parser.add_argument(
+        '--cli', 
+        action='store_true',
+        help='使用 CLI 測試模式 (需要配合 --image 參數)'
+    )
+    
+    # CLI 模式專用參數
+    parser.add_argument(
+        '--image', '-i',
+        type=str,
+        help='要分析的圖像檔案路徑 (CLI 模式使用)'
+    )
+    
+    parser.add_argument(
+        '--user', '-u',
+        type=str,
+        default='cli_user',
+        help='用戶ID (CLI 模式使用，預設: cli_user)'
+    )
+    
+    parser.add_argument(
+        '--debug', '-d',
+        action='store_true',
+        help='啟用除錯模式 (CLI 模式使用)'
+    )
+    
+    parser.add_argument(
+        '--log-level', '-l',
+        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
+        default='INFO',
+        help='設定日誌級別 (預設: INFO)'
+    )
+    
+    args = parser.parse_args()
+    
+    # 設定日誌
+    setup_logging(args.log_level)
+    
+    if args.cli:
+        # CLI 測試模式
+        if not args.image:
+            print("❌ CLI 模式需要指定 --image 參數")
+            parser.print_help()
+            return 1
+        
+        print("🔧 CLI 測試模式")
+        return run_cli_with_args(args)
+    else:
+        # Discord Bot 模式 (預設)
+        return run_discord_bot()
+
+
+def run_cli_with_args(args):
+    """使用解析的參數運行 CLI 模式"""
+    # 重新建構 sys.argv 以相容原有的 run_cli 函數
+    original_argv = sys.argv[:]
+    sys.argv = ['main.py', args.image]
+    
+    if args.debug:
+        sys.argv.append('--debug')
+    if args.user != 'cli_user':
+        sys.argv.extend(['--user', args.user])
+    sys.argv.extend(['--log-level', args.log_level])
+    
+    try:
+        result = run_cli()
+        return result
+    finally:
+        # 恢復原始 sys.argv
+        sys.argv = original_argv
+
+
 if __name__ == "__main__":
-    # CLI 模式：運行命令列介面
-    sys.exit(run_cli())
+    # 主程式入口點
+    try:
+        exit_code = main()
+        sys.exit(exit_code)
+    except KeyboardInterrupt:
+        print("\n👋 程式已中止")
+        sys.exit(0)
+    except Exception as e:
+        print(f"❌ 啟動失敗: {e}")
+        sys.exit(1)
