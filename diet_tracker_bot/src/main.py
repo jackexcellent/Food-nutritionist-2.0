@@ -39,6 +39,7 @@ load_dotenv(config_path)
 # 導入專案模組
 from image_processor import process_image  # 使用模組級函數而不是類別
 from nutrition_calculator import get_nutrition
+from data_storage import store_meal, get_history, get_statistics, init_database
 from utils import handle_error, get_cached_nutrition, set_cached_nutrition
 
 def setup_logging(log_level: str = 'INFO'):
@@ -131,7 +132,7 @@ def validate_environment():
     
     return len(missing_vars) == 0
 
-def process_image_to_nutrition(image_path: str, logger: logging.Logger) -> Tuple[List[str], Dict[str, float], float]:
+def process_image_to_nutrition(image_path: str, logger: logging.Logger, user_id: str = None) -> Tuple[List[str], Dict[str, float], float, int]:
     """
     端到端處理：從圖像到營養資訊
     
@@ -142,12 +143,14 @@ def process_image_to_nutrition(image_path: str, logger: logging.Logger) -> Tuple
     Args:
         image_path: 圖像檔案路徑
         logger: 日誌器實例
+        user_id: 用戶識別碼，如果提供將儲存記錄到資料庫
     
     Returns:
-        Tuple[List[str], Dict[str, float], float]: 
+        Tuple[List[str], Dict[str, float], float, int]: 
             - 食物清單 (英文名稱)
             - 營養資料字典 {食物: 熱量}
             - 總熱量
+            - 記錄ID (如果儲存到資料庫)
     
     Raises:
         FileNotFoundError: 圖像檔案不存在
@@ -171,7 +174,7 @@ def process_image_to_nutrition(image_path: str, logger: logging.Logger) -> Tuple
         
         if not food_items:
             logger.warning("⚠️  未能識別出任何食物")
-            return [], {}, 0.0
+            return [], {}, 0.0, None
         
         logger.info(f"✅ 成功識別 {len(food_items)} 種食物")
         logger.info(f"   食物清單: {', '.join(food_items)}")
@@ -192,7 +195,27 @@ def process_image_to_nutrition(image_path: str, logger: logging.Logger) -> Tuple
         
         logger.info(f"✅ 營養計算完成")
         
-        return food_items, nutrition_data, total_calories
+        # ========== 階段 3: 儲存記錄 (可選) ==========
+        record_id = None
+        if user_id:
+            logger.info("\n" + "=" * 60)
+            logger.info("階段 3: 儲存飲食記錄")
+            logger.info("=" * 60)
+            
+            try:
+                # 確保資料庫已初始化
+                init_database()
+                
+                # 儲存記錄
+                logger.info(f"💾 儲存記錄到資料庫: 用戶 {user_id}")
+                record_id = store_meal(user_id, nutrition_data, total_calories)
+                logger.info(f"✅ 記錄已儲存: ID={record_id}")
+                
+            except Exception as e:
+                logger.warning(f"⚠️  儲存記錄失敗: {e}")
+                # 不影響主要功能，只記錄警告
+        
+        return food_items, nutrition_data, total_calories, record_id
         
     except FileNotFoundError as e:
         handle_error(e, "圖像檔案不存在", logger)
@@ -204,7 +227,9 @@ def process_image_to_nutrition(image_path: str, logger: logging.Logger) -> Tuple
 def display_results(food_items: List[str], 
                    nutrition_data: Dict[str, float], 
                    total_calories: float,
-                   logger: logging.Logger) -> None:
+                   logger: logging.Logger,
+                   record_id: int = None,
+                   user_id: str = None) -> None:
     """
     格式化顯示處理結果
     
@@ -231,6 +256,11 @@ def display_results(food_items: List[str],
     
     # 顯示總熱量
     logger.info(f"\n📊 總熱量: {total_calories:.1f} kcal")
+    
+    # 顯示儲存資訊
+    if record_id and user_id:
+        logger.info(f"💾 記錄已儲存: ID={record_id} (用戶: {user_id})")
+    
     logger.info("=" * 60)
     
     # 顯示資料來源說明
@@ -238,6 +268,80 @@ def display_results(food_items: List[str],
     logger.info("   • 圖像識別: Azure Computer Vision API")
     logger.info("   • 營養資料: TFND 台灣食品營養資料庫 + USDA FoodData Central")
     logger.info("   • 快取機制: 記憶體快取 (未來可升級為 Redis)")
+
+def show_user_history(user_id: str, days: int, logger: logging.Logger) -> None:
+    """
+    顯示用戶歷史記錄
+    
+    Args:
+        user_id: 用戶識別碼
+        days: 查詢天數
+        logger: 日誌器實例
+    """
+    logger.info("=" * 60)
+    logger.info(f"📋 用戶歷史記錄: {user_id} (最近 {days} 天)")
+    logger.info("=" * 60)
+    
+    try:
+        # 確保資料庫已初始化
+        init_database()
+        
+        # 查詢歷史記錄
+        history = get_history(user_id, days)
+        
+        if not history:
+            logger.info("📭 沒有找到歷史記錄")
+            return
+        
+        logger.info(f"📊 找到 {len(history)} 筆記錄:\n")
+        
+        # 顯示每筆記錄
+        for i, (record_id, date, foods, calories, created_at) in enumerate(history, 1):
+            logger.info(f"📝 記錄 #{i} (ID: {record_id})")
+            logger.info(f"   📅 日期: {date}")
+            logger.info(f"   🔥 總熱量: {calories:.1f} kcal")
+            logger.info(f"   🍽️  食物:")
+            
+            for food_name, food_calories in foods.items():
+                logger.info(f"      • {food_name}: {food_calories} kcal")
+            
+            logger.info(f"   ⏰ 記錄時間: {created_at}")
+            logger.info("-" * 40)
+        
+        # 顯示統計
+        show_user_statistics(user_id, logger, days)
+        
+    except Exception as e:
+        logger.error(f"❌ 查詢歷史記錄失敗: {e}")
+
+def show_user_statistics(user_id: str, logger: logging.Logger, days: int = 7) -> None:
+    """
+    顯示用戶統計資訊
+    
+    Args:
+        user_id: 用戶識別碼
+        logger: 日誌器實例
+        days: 統計天數
+    """
+    try:
+        # 獲取統計資訊
+        stats = get_statistics(user_id, days)
+        
+        logger.info(f"\n📊 統計資訊 (最近 {days} 天):")
+        logger.info("=" * 40)
+        logger.info(f"   總餐數: {stats['total_meals']}")
+        logger.info(f"   總熱量: {stats['total_calories']:.1f} kcal")
+        
+        if stats['total_meals'] > 0:
+            logger.info(f"   平均每餐: {stats['avg_calories']:.1f} kcal")
+        
+        if stats['most_common_foods']:
+            logger.info(f"\n🏆 最常吃的食物:")
+            for food, count in stats['most_common_foods'][:5]:
+                logger.info(f"      • {food}: {count} 次")
+        
+    except Exception as e:
+        logger.error(f"❌ 獲取統計資訊失敗: {e}")
 
 def run_cli():
     """
@@ -276,8 +380,26 @@ def run_cli():
     parser.add_argument(
         '--image', '-i',
         type=str,
-        required=True,
         help='圖像檔案路徑 (支援 jpg, png, jpeg)'
+    )
+    
+    parser.add_argument(
+        '--user', '-u',
+        type=str,
+        help='用戶ID (如果提供將儲存記錄到資料庫)'
+    )
+    
+    parser.add_argument(
+        '--history', 
+        action='store_true',
+        help='顯示用戶歷史記錄 (需要配合 --user)'
+    )
+    
+    parser.add_argument(
+        '--days',
+        type=int,
+        default=7,
+        help='歷史記錄查詢天數 (預設 7 天)'
     )
     
     parser.add_argument(
@@ -294,6 +416,13 @@ def run_cli():
     
     args = parser.parse_args()
     
+    # 驗證參數組合
+    if not args.image and not args.history:
+        parser.error("必須指定 --image 或 --history 參數")
+    
+    if args.history and not args.user:
+        parser.error("--history 參數需要配合 --user 指定用戶ID")
+    
     # 設定日誌級別
     log_level = 'DEBUG' if args.debug else 'INFO'
     logger = setup_logging(log_level)
@@ -305,16 +434,28 @@ def run_cli():
     logger.info("=" * 60)
     
     try:
+        # 檢查是否要顯示歷史記錄
+        if args.history:
+            show_user_history(args.user, args.days, logger)
+            return 0
+        
         # 執行端到端處理
-        food_items, nutrition_data, total_calories = process_image_to_nutrition(
+        food_items, nutrition_data, total_calories, record_id = process_image_to_nutrition(
             args.image, 
-            logger
+            logger,
+            user_id=args.user
         )
         
         # 顯示結果
         if food_items:
-            display_results(food_items, nutrition_data, total_calories, logger)
+            display_results(food_items, nutrition_data, total_calories, logger, 
+                          record_id=record_id, user_id=args.user)
             logger.info("\n✅ 處理完成！")
+            
+            # 如果有用戶ID，額外顯示統計資訊
+            if args.user:
+                show_user_statistics(args.user, logger)
+            
             return 0
         else:
             logger.warning("\n⚠️  未能識別出任何食物，請嘗試其他圖像")

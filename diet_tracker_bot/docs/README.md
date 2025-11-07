@@ -11,7 +11,7 @@
 - **🔍 食物識別**: 使用 Azure Computer Vision API 識別上傳的食物圖片
 - **📊 營養分析**: 結合 USDA API 和台灣衛福部資料計算營養成分
 - **💾 歷史記錄**: 儲存用戶的飲食歷史和偏好
-- **🤖 AI 推薦**: 使用 Google Gemini LLM 生成個人化飲食建議
+- **🤖 AI 推薦**: 使用 Google Gemini LLM 生成個人化飲食建議 (階段 5)
 - **📱 Discord 整合**: 透過 Discord Bot 介面提供便利的用戶體驗
 
 ### 🏗️ 系統架構
@@ -24,19 +24,21 @@ diet_tracker_bot/
 │   ├── utils.py            # 共用工具函數 + 快取機制
 │   ├── image_processor.py  # 圖像處理模組 (階段1)
 │   ├── nutrition_calculator.py  # 營養計算模組 (階段2)
-│   └── data_storage.py     # ✨ 資料儲存模組 (階段4)
+│   ├── data_storage.py     # 資料儲存模組 (階段4)
+│   └── recommendation_engine.py  # ✨ AI 推薦引擎 (階段5)
 ├── config/                  # 配置檔案
 │   └── .env                # 環境變數 (需要設定API金鑰)
 ├── data/                   # 資料檔案
 │   ├── tfnd_clean.jsonl    # 台灣食物營養資料庫
-│   ├── user_data.db        # ✨ SQLite 使用者資料庫 (階段4)
+│   ├── user_data.db        # SQLite 使用者資料庫 (階段4)
 │   └── cache/              # 快取資料 (自動生成)
 ├── tests/                  # 測試檔案
 │   ├── __init__.py
 │   ├── test_image_processor.py      # 圖像處理測試 (階段1)
 │   ├── test_nutrition_calculator.py # 營養計算測試 (階段2)
 │   ├── test_integration.py          # 系統整合測試 (階段3)
-│   └── test_data_storage.py         # ✨ 資料儲存測試 (階段4)
+│   ├── test_data_storage.py         # 資料儲存測試 (階段4)
+│   └── test_recommendation_engine.py # ✨ AI 推薦引擎測試 (階段5)
 ├── docs/                   # 文件資料夾
 │   └── README.md           # 專案說明文件
 ├── logs/                   # 日誌檔案 (自動生成)
@@ -53,16 +55,16 @@ main.py
 ├── utils.py (日誌、錯誤處理、圖像儲存、快取機制)
 ├── image_processor.py (圖像識別與食物偵測 - 階段1)
 ├── nutrition_calculator.py (營養計算與資料庫查詢 - 階段2)
-├── data_storage.py (✨ SQLite 資料儲存 - 階段4)
+├── data_storage.py (SQLite 資料儲存 - 階段4)
+├── recommendation_engine.py (✨ AI 推薦引擎 - 階段5)
 ├── bot/ (未來實現)
 │   ├── discord_bot.py
 │   └── commands.py
 ├── database/ (未來實現 - MongoDB)
 │   ├── models.py
 │   └── repository.py
-└── ai/ (未來實現)
-    ├── gemini_client.py
-    └── recommendation_engine.py
+└── ai/ (已整合到 recommendation_engine.py)
+    └── advanced_analytics.py (未來擴展)
 ```
 
 ## 🚀 快速開始
@@ -368,8 +370,11 @@ pytest tests/test_nutrition_calculator.py -v
 # 執行系統整合測試 (階段3)
 pytest tests/test_integration.py -v
 
-# ✨ 執行資料儲存測試 (階段4, 26項測試)
+# 執行資料儲存測試 (階段4, 26項測試)
 pytest tests/test_data_storage.py -v
+
+# 🧠 執行 AI 推薦引擎測試 (階段5)
+pytest tests/test_recommendation_engine.py -v
 ```
 
 ### 🆕 圖像處理測試指南
@@ -1137,6 +1142,232 @@ mongorestore --db diet_tracker backup/diet_tracker/
 
 ---
 
+## 🧠 階段 5: AI 推薦引擎
+
+### 功能概述
+
+實現基於 Google Gemini LLM 的智能推薦系統，能夠分析用戶飲食歷史並生成個人化的健康建議。系統結合專業營養學知識與 AI 技術，提供結構化且實用的飲食指導。
+
+### 核心功能 (`src/recommendation_engine.py`)
+
+#### 1. 智能推薦生成
+
+```python
+from src.recommendation_engine import get_recommendation
+
+# 生成基於歷史的個人化推薦
+user_id = "discord_user_123"
+recommendation = get_recommendation(user_id, days=7)
+
+print(recommendation)
+# 輸出結構化推薦...
+```
+
+#### 2. Gemini AI 整合
+
+系統使用 Google Gemini 1.5 Flash 模型進行快速推薦生成：
+
+```python
+import google.generativeai as genai
+
+# 自動初始化 (從 .env 載入 GEMINI_KEY)
+genai.configure(api_key=GEMINI_KEY)
+model = genai.GenerativeModel('gemini-1.5-flash')
+
+# 構建結構化 prompt
+prompt = """
+你是一位專業的營養師，請根據用戶的飲食歷史提供健康建議。
+
+飲食歷史資料：
+{history_json}
+
+統計資訊：
+- 總餐數：{total_meals}
+- 平均熱量：{avg_calories:.1f} kcal
+- 最常吃的食物：{common_foods}
+
+請提供結構化的分析和建議...
+"""
+
+response = model.generate_content(prompt)
+```
+
+### 推薦流程圖
+
+```
+┌──────────────┐
+│  用戶請求推薦  │
+│   user_id    │
+└──────┬───────┘
+       │
+       ▼
+┌─────────────────────────────────────┐
+│ 1. 資料收集 (data_storage)          │
+├─────────────────────────────────────┤
+│ • get_history(user_id, days=7)      │
+│ • get_statistics(user_id, days=7)   │
+│ • 格式化為結構化 JSON               │
+└──────────────┬──────────────────────┘
+               │ 飲食歷史 + 統計資訊
+               ▼
+┌─────────────────────────────────────┐
+│ 2. Prompt 構建 (PromptTemplates)    │
+├─────────────────────────────────────┤
+│ • 基礎推薦模板 (MVP)                │
+│ • 結構化輸出格式                    │
+│ • 營養學專業指導                    │
+│ • 個人化資料嵌入                    │
+└──────────────┬──────────────────────┘
+               │ 結構化 Prompt
+               ▼
+┌─────────────────────────────────────┐
+│ 3. AI 推薦生成 (Gemini API)         │
+├─────────────────────────────────────┤
+│ Primary: Google Gemini 1.5 Flash    │
+│ • model.generate_content(prompt)     │
+│ • 回應驗證與品質檢查                │
+│                                     │
+│ Fallback: 規則型推薦引擎             │
+│ • 熱量分析 (高/低/適中)             │
+│ • 飲食頻率評估                      │
+│ • 食物多樣性檢查                    │
+└──────────────┬──────────────────────┘
+               │ 結構化推薦內容
+               ▼
+┌─────────────────────────────────────┐
+│ 4. 推薦結果輸出                     │
+├─────────────────────────────────────┤
+│ 🔍 **飲食分析**                     │
+│ 💡 **健康建議** (3-5項具體建議)     │
+│ 🍎 **推薦食物** (營養價值說明)      │
+│ ⚠️ **注意事項** (個人化提醒)        │
+└─────────────────────────────────────┘
+```
+
+### Prompt 模板設計
+
+#### 基礎推薦模板 (MVP)
+
+```python
+class PromptTemplates:
+    BASIC_RECOMMENDATION = """
+你是一位專業的營養師，請根據用戶的飲食歷史提供健康建議。
+
+飲食歷史資料：
+{history_json}
+
+統計資訊：
+- 總餐數：{total_meals}
+- 平均熱量：{avg_calories:.1f} kcal
+- 最常吃的食物：{common_foods}
+
+請提供結構化的分析和建議，格式如下：
+
+🔍 **飲食分析**：
+[分析用戶的飲食模式、熱量攝取、食物多樣性等]
+
+💡 **健康建議**：
+[提供3-5個具體的改善建議]
+
+🍎 **推薦食物**：
+[推薦3-5種適合的食物，說明營養價值]
+
+⚠️ **注意事項**：
+[提醒需要注意的飲食習慣]
+
+請用繁體中文回答，建議要實用且易於執行。
+"""
+```
+
+#### 推薦輸出範例
+
+```
+🔍 **飲食分析**：
+根據您最近7天的飲食記錄，平均每餐熱量為 245 kcal，整體熱量適中。
+您常食用蛋白質豐富的食物如雞肉和魚類，但蔬菜攝取略顯不足。
+
+💡 **健康建議**：
+1. 增加綠色蔬菜攝取，建議每餐至少包含一份蔬菜
+2. 保持優質蛋白質來源的多樣性，可添加豆類製品
+3. 適量增加全穀類食物，提供穩定的能量來源
+4. 控制加工食品攝取，優先選擇原型食物
+
+🍎 **推薦食物**：
+- 深綠色蔬菜：菠菜、花椰菜 (提供豐富維生素K和葉酸)
+- 豆類製品：豆腐、黑豆 (植物性蛋白質和纖維)
+- 全穀類：糙米、燕麥 (複合碳水化合物和B群維生素)
+
+⚠️ **注意事項**：
+保持規律用餐時間，避免長時間空腹。如有特殊健康狀況，建議諮詢專業營養師。
+```
+
+### Fallback 機制
+
+當 Gemini API 不可用時，系統自動切換到規則型推薦：
+
+```python
+def _generate_rule_based_recommendation(history_data, stats, days):
+    """規則型推薦 (Fallback)"""
+
+    # 熱量分析
+    if avg_calories > 600:
+        analysis_notes.append("您的平均熱量偏高，建議適量減少高熱量食物")
+    elif avg_calories < 300:
+        analysis_notes.append("您的平均熱量偏低，建議增加營養豐富的食物")
+
+    # 飲食頻率分析
+    meals_per_day = total_meals / days
+    if meals_per_day < 2:
+        analysis_notes.append("建議增加用餐頻率，保持規律飲食")
+
+    # 食物多樣性分析
+    unique_foods = len(set([food for food, _ in common_foods]))
+    if unique_foods < 5:
+        analysis_notes.append("建議增加食物種類，提升營養多樣性")
+
+    return formatted_recommendation
+```
+
+### API 配置與環境設定
+
+在 `config/.env` 中添加 Gemini API 金鑰：
+
+```bash
+# Google Gemini API 配置
+GEMINI_KEY=your_google_gemini_api_key_here
+
+# 其他已有的 API 配置...
+AZURE_KEY=your_azure_key_here
+USDA_KEY=your_usda_key_here
+```
+
+### 測試 (`tests/test_recommendation_engine.py`)
+
+完整的推薦引擎測試涵蓋：
+
+```bash
+# 運行所有推薦引擎測試
+pytest tests/test_recommendation_engine.py -v
+
+# 測試類別分類
+pytest tests/test_recommendation_engine.py::TestGeminiApiIntegration -v    # Gemini API 測試
+pytest tests/test_recommendation_engine.py::TestRuleBasedFallback -v       # Fallback 機制測試
+pytest tests/test_recommendation_engine.py::TestPromptTemplates -v         # Prompt 模板測試
+```
+
+**測試涵蓋範圍：**
+
+- ✅ Gemini API 整合與 mock 測試
+- ✅ Prompt 模板格式化與驗證
+- ✅ Fallback 機制（規則型推薦）
+- ✅ 資料格式化與結構驗證
+- ✅ 錯誤處理與容錯機制
+- ✅ 參數驗證與邊界條件
+- ✅ 效能測試（大量歷史資料）
+- ✅ 完整工作流程整合測試
+
+---
+
 ## �📚 開發指南
 
 ### 程式碼風格
@@ -1185,6 +1416,9 @@ except Exception as e:
 - [x] ✨ CRUD 操作與歷史查詢 - 階段 4
 - [x] ✨ 統計功能與資料匯出 - 階段 4
 - [x] ✨ MongoDB 遷移文檔 - 階段 4
+- [x] 🧠 AI 推薦引擎 (Gemini LLM) - 階段 5
+- [x] 🧠 結構化 Prompt 模板 - 階段 5
+- [x] 🧠 規則型 Fallback 機制 - 階段 5
 - [ ] Discord Bot 基礎功能
 - [ ] Discord Bot 與資料庫整合
 
@@ -1317,6 +1551,6 @@ except Exception as e:
 
 ---
 
-**版本**: 1.1.0 (MVP - 資料持久化完成)  
-**最後更新**: 2024-10-28  
+**版本**: 1.2.0 (MVP - AI 推薦引擎完成)  
+**最後更新**: 2024-11-07  
 **開發團隊**: Food Nutritionist Team
