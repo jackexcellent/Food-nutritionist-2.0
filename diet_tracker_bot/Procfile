@@ -1,0 +1,15 @@
+# Discord 飲食追蹤機器人 - Heroku 部署配置
+# 
+# 這個 Procfile 定義了在 Heroku 上運行機器人的方式
+# 
+# 部署步驟：
+# 1. 確保所有依賴在 requirements.txt 中
+# 2. 設定環境變數 (DISCORD_TOKEN, AZURE_KEY, 等)
+# 3. 推送至 Heroku Git repository
+# 4. Heroku 會自動使用此檔案啟動應用程式
+#
+# 未來擴展：
+# - web: python src/web_app.py (Flask Web 介面)
+# - worker: python src/background_tasks.py (背景任務處理)
+
+worker: python src/main.py

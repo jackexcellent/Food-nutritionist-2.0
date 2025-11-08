@@ -8,6 +8,12 @@ import json
 from pathlib import Path
 from datetime import datetime
 import sys
+import os
+
+# 確保從專案根目錄運行
+script_dir = Path(__file__).parent
+project_root = script_dir.parent
+os.chdir(project_root)
 
 # 資料庫路徑
 DB_PATH = Path("data/user_data.db")
