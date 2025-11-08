@@ -270,6 +270,21 @@ async def analyze_food(interaction: discord.Interaction, 圖片: discord.Attachm
             # 解包返回值: (營養字典, 總熱量)
             nutrition_data, total_calories = nutrition_result
             
+            # 檢查是否有任何食物找到熱量資訊
+            if not nutrition_data or total_calories == 0:
+                # 沒有任何食物有熱量資訊
+                food_list_text = ', '.join(foods)
+                await interaction.edit_original_response(
+                    content=f"❌ **無法獲取熱量資訊**\n\n"
+                           f"識別的食物: {food_list_text}\n\n"
+                           f"這些食物在資料庫（TFND、USDA）和AI估算中都找不到熱量資訊。\n"
+                           f"請嘗試：\n"
+                           f"• 使用更具體的食物名稱\n"
+                           f"• 拍攝更清晰的照片\n"
+                           f"• 確保照片中食物清晰可見"
+                )
+                return
+            
             # 根據份量調整營養數據（預設為100g基準）
             portion_factor = portion_size / 100.0
             adjusted_nutrition_data = {
@@ -376,6 +391,12 @@ async def help_command(interaction: discord.Interaction):
     )
     
     embed.add_field(
+        name="🤖 /recommend",
+        value="獲得個人化飲食建議\n• 基於歷史記錄的 RAG 推薦\n• 分析飲食習慣和趨勢\n• 提供具體的飲食改善建議\n• 可指定目標餐次和分析天數",
+        inline=False
+    )
+    
+    embed.add_field(
         name="🤖 其他命令",
         value="• `/ask` - 向 AI 營養師提問\n• `/hello` - 打招呼互動\n• `/help` - 顯示此說明",
         inline=False
@@ -383,7 +404,7 @@ async def help_command(interaction: discord.Interaction):
     
     embed.add_field(
         name="🔜 即將推出",
-        value="• `/stats` - 詳細營養統計報告\n• `/recommend` - 個人化飲食建議\n• `/analyze3` - 三階段增強分析",
+        value="• `/stats` - 詳細營養統計報告\n• 更多 AI 功能即將上線",
         inline=False
     )
     
@@ -435,31 +456,31 @@ class MealTypeView(discord.ui.View):
     @discord.ui.button(label="🌅 早餐", style=discord.ButtonStyle.primary)
     async def breakfast_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.meal_type = 'breakfast'
-        await interaction.response.send_message("✅ 已選擇：**早餐**", ephemeral=True)
+        await interaction.response.edit_message(content="✅ 已選擇：**早餐**", view=None)
         self.stop()
     
     @discord.ui.button(label="🌞 午餐", style=discord.ButtonStyle.primary)
     async def lunch_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.meal_type = 'lunch'
-        await interaction.response.send_message("✅ 已選擇：**午餐**", ephemeral=True)
+        await interaction.response.edit_message(content="✅ 已選擇：**午餐**", view=None)
         self.stop()
     
     @discord.ui.button(label="🌙 晚餐", style=discord.ButtonStyle.primary)
     async def dinner_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.meal_type = 'dinner'
-        await interaction.response.send_message("✅ 已選擇：**晚餐**", ephemeral=True)
+        await interaction.response.edit_message(content="✅ 已選擇：**晚餐**", view=None)
         self.stop()
     
     @discord.ui.button(label="🍿 點心", style=discord.ButtonStyle.secondary)
     async def snack_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.meal_type = 'snack'
-        await interaction.response.send_message("✅ 已選擇：**點心**", ephemeral=True)
+        await interaction.response.edit_message(content="✅ 已選擇：**點心**", view=None)
         self.stop()
     
     @discord.ui.button(label="🌃 宵夜", style=discord.ButtonStyle.secondary)
     async def latenight_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.meal_type = 'latenight'
-        await interaction.response.send_message("✅ 已選擇：**宵夜**", ephemeral=True)
+        await interaction.response.edit_message(content="✅ 已選擇：**宵夜**", view=None)
         self.stop()
     
     @discord.ui.button(label="✏️ 其他", style=discord.ButtonStyle.success, row=1)
@@ -472,8 +493,17 @@ class MealTypeView(discord.ui.View):
         if modal.custom_meal:
             self.meal_type = 'other'
             self.custom_meal = modal.custom_meal
+            # 編輯原始訊息以移除按鈕
+            await interaction.edit_original_response(
+                content=f"✅ 已選擇：**{self.custom_meal}**", 
+                view=None
+            )
         else:
             self.meal_type = 'meal'
+            await interaction.edit_original_response(
+                content="✅ 已選擇：**一般餐點**", 
+                view=None
+            )
         
         self.stop()
 
@@ -568,6 +598,152 @@ def _parse_meal_type_input(content: str) -> Optional[str]:
         return 'snack'
     
     return None
+
+
+def _parse_meal_type_from_chinese(meal_input: str) -> str:
+    """
+    從中文輸入解析餐次類型 (用於 /recommend 命令)
+    
+    Args:
+        meal_input: 用戶輸入的餐次文字
+    
+    Returns:
+        標準化的餐次類型
+    """
+    if not meal_input:
+        return 'meal'
+    
+    meal_input_lower = meal_input.lower().strip()
+    
+    # 使用現有的解析函數
+    parsed = _parse_meal_type_input(meal_input_lower)
+    
+    return parsed if parsed else 'meal'
+
+
+def _parse_recommendation_sections(recommendation: str) -> Dict[str, str]:
+    """
+    解析推薦內容為不同區段
+    
+    Args:
+        recommendation: 完整的推薦內容
+    
+    Returns:
+        包含各區段的字典 {'analysis': str, 'suggestions': str, 'foods': str, 'warnings': str}
+    """
+    sections = {
+        'analysis': '',
+        'suggestions': '',
+        'foods': '',
+        'warnings': ''
+    }
+    
+    if not recommendation:
+        return sections
+    
+    lines = recommendation.split('\n')
+    current_section = None
+    current_content = []
+    
+    for line in lines:
+        line = line.strip()
+        
+        # 識別區段標題
+        if '飲食分析' in line or '🔍' in line:
+            if current_section and current_content:
+                sections[current_section] = '\n'.join(current_content)
+            current_section = 'analysis'
+            current_content = []
+        elif '健康建議' in line or '💡' in line:
+            if current_section and current_content:
+                sections[current_section] = '\n'.join(current_content)
+            current_section = 'suggestions'
+            current_content = []
+        elif '推薦食物' in line or '🍎' in line:
+            if current_section and current_content:
+                sections[current_section] = '\n'.join(current_content)
+            current_section = 'foods'
+            current_content = []
+        elif '注意事項' in line or '⚠️' in line:
+            if current_section and current_content:
+                sections[current_section] = '\n'.join(current_content)
+            current_section = 'warnings'
+            current_content = []
+        elif line and current_section:
+            # 添加內容到當前區段
+            current_content.append(line)
+    
+    # 保存最後一個區段
+    if current_section and current_content:
+        sections[current_section] = '\n'.join(current_content)
+    
+    return sections
+
+
+def _split_recommendation_text(text: str, max_length: int = 1024) -> List[str]:
+    """
+    將長文本分割為多個區段以符合 Discord Embed 限制
+    
+    Args:
+        text: 要分割的文字
+        max_length: 每個區段的最大長度
+    
+    Returns:
+        分割後的文字列表
+    """
+    if len(text) <= max_length:
+        return [text]
+    
+    chunks = []
+    current_chunk = ""
+    
+    for line in text.split('\n'):
+        if len(current_chunk) + len(line) + 1 <= max_length:
+            current_chunk += line + '\n'
+        else:
+            if current_chunk:
+                chunks.append(current_chunk.strip())
+            current_chunk = line + '\n'
+    
+    if current_chunk:
+        chunks.append(current_chunk.strip())
+    
+    return chunks
+
+
+def _extract_action_items(recommendation: str) -> str:
+    """
+    從推薦中提取行動項目
+    
+    Args:
+        recommendation: 推薦內容
+    
+    Returns:
+        格式化的行動項目文字
+    """
+    if not recommendation:
+        return ""
+    
+    action_keywords = ['建議', '應該', '可以', '試試', '嘗試', '多吃', '少吃', '避免', '增加', '減少']
+    action_items = []
+    
+    lines = recommendation.split('\n')
+    
+    for line in lines:
+        line = line.strip()
+        # 尋找包含行動關鍵字的行
+        if any(keyword in line for keyword in action_keywords):
+            # 清理行號和項目符號
+            clean_line = line.lstrip('0123456789.-•*# ').strip()
+            if clean_line and len(clean_line) > 10:  # 過濾太短的行
+                # 如果還沒有項目符號,添加一個
+                if not clean_line.startswith(('•', '-', '*')):
+                    clean_line = f"• {clean_line}"
+                
+                if clean_line not in action_items and len(action_items) < 5:  # 最多5項
+                    action_items.append(clean_line)
+    
+    return '\n'.join(action_items) if action_items else ""
 
 
 def _format_meal_type_chinese(meal_type: str, custom_name: str = None) -> str:
@@ -720,7 +896,7 @@ def _format_track_response(
     # 記錄資訊
     embed.add_field(
         name="📝 記錄資訊",
-        value=f"記錄 ID: #{meal_id}\n使用 `/history` 查看完整記錄",
+        value=f"使用 `/history` 查看完整記錄",
         inline=False
     )
     
@@ -906,6 +1082,189 @@ async def history_command(interaction: discord.Interaction, 天數: int = 7):
                 pass
 
 
+@bot.tree.command(name='recommend', description='獲得個人化飲食建議')
+async def recommend_command(interaction: discord.Interaction, 餐次: str = None, 天數: int = 7):
+    """
+    /recommend 命令 - 基於歷史的個人化 RAG 推薦
+    
+    整合 RAG (Retrieval-Augmented Generation) 推薦引擎,
+    根據用戶的飲食歷史提供個人化的飲食建議。
+    
+    Args:
+        interaction: Discord 斜槓命令互動
+        餐次: 想要建議的餐次 (早餐/午餐/晚餐/點心),不提供則分析整體飲食
+        天數: 分析最近幾天的記錄,預設 7 天
+    """
+    try:
+        user_id = str(interaction.user.id)
+        
+        # 參數驗證
+        if 天數 <= 0 or 天數 > 30:
+            await interaction.response.send_message(
+                "❌ **天數參數錯誤**\n\n天數必須在 1-30 之間",
+                ephemeral=True
+            )
+            return
+        
+        await interaction.response.send_message("🔄 **正在分析您的飲食歷史...**\n請稍候,AI 正在為您生成個人化建議")
+        
+        # 解析餐次類型
+        meal_type = _parse_meal_type_from_chinese(餐次) if 餐次 else 'meal'
+        
+        # 獲取當前餐點資訊 (如果有)
+        history_records = data_storage.get_history(user_id, 1)
+        current_foods = None
+        current_calories = 0.0
+        
+        if history_records and len(history_records) > 0:
+            # 使用最近一筆記錄作為當前參考
+            latest_record = history_records[0]
+            current_foods = latest_record[2]  # foods dict
+            current_calories = latest_record[3]  # calories
+        
+        # 呼叫 RAG 推薦引擎
+        await interaction.edit_original_response(
+            content="🤖 **AI 正在生成個人化建議...**\n"
+                   f"• 分析天數: {天數} 天\n"
+                   f"• 目標餐次: {_format_meal_type_chinese(meal_type)}\n"
+                   "• 整合歷史數據中..."
+        )
+        
+        recommendation = recommendation_engine.get_recommendation(
+            user_id=user_id,
+            meal_type=meal_type,
+            current_foods=current_foods,
+            current_calories=current_calories,
+            days=天數
+        )
+        
+        # 檢查是否有歷史記錄
+        all_history = data_storage.get_history(user_id, 天數)
+        has_history = all_history and len(all_history) > 0
+        
+        # 建立推薦結果 Embed
+        embed = discord.Embed(
+            title="🤖 個人化飲食建議",
+            description=f"基於您最近 {天數} 天的飲食記錄",
+            color=0x9b59b6,  # 紫色
+            timestamp=datetime.now()
+        )
+        
+        # 添加分析範圍資訊
+        if has_history:
+            embed.add_field(
+                name="📊 分析範圍",
+                value=f"• **天數**: {天數} 天\n"
+                      f"• **記錄數**: {len(all_history)} 筆\n"
+                      f"• **目標餐次**: {_format_meal_type_chinese(meal_type)}",
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="ℹ️ 提示",
+                value=f"您是新用戶或最近 {天數} 天內沒有記錄。\n以下是基於一般營養原則的建議。",
+                inline=False
+            )
+        
+        # 解析並格式化推薦內容
+        recommendation_sections = _parse_recommendation_sections(recommendation)
+        
+        # 飲食分析
+        if recommendation_sections.get('analysis'):
+            analysis_text = recommendation_sections['analysis']
+            # 限制長度以符合 Discord Embed 限制
+            if len(analysis_text) > 1024:
+                analysis_text = analysis_text[:1021] + "..."
+            embed.add_field(
+                name="🔍 飲食分析",
+                value=analysis_text,
+                inline=False
+            )
+        
+        # 健康建議
+        if recommendation_sections.get('suggestions'):
+            suggestions_text = recommendation_sections['suggestions']
+            if len(suggestions_text) > 1024:
+                suggestions_text = suggestions_text[:1021] + "..."
+            embed.add_field(
+                name="💡 健康建議",
+                value=suggestions_text,
+                inline=False
+            )
+        
+        # 推薦食物
+        if recommendation_sections.get('foods'):
+            foods_text = recommendation_sections['foods']
+            if len(foods_text) > 1024:
+                foods_text = foods_text[:1021] + "..."
+            embed.add_field(
+                name="🍎 推薦食物",
+                value=foods_text,
+                inline=False
+            )
+        
+        # 注意事項
+        if recommendation_sections.get('warnings'):
+            warnings_text = recommendation_sections['warnings']
+            if len(warnings_text) > 1024:
+                warnings_text = warnings_text[:1021] + "..."
+            embed.add_field(
+                name="⚠️ 注意事項",
+                value=warnings_text,
+                inline=False
+            )
+        
+        # 如果沒有解析到任何區段,顯示原始推薦
+        if not any(recommendation_sections.values()):
+            # 分段顯示原始推薦
+            chunks = _split_recommendation_text(recommendation, 1024)
+            for i, chunk in enumerate(chunks[:3]):  # 最多3個區段
+                embed.add_field(
+                    name=f"💬 建議 ({i+1}/{len(chunks)})" if len(chunks) > 1 else "💬 個人化建議",
+                    value=chunk,
+                    inline=False
+                )
+        
+        # 行動建議
+        action_items = _extract_action_items(recommendation)
+        if action_items:
+            embed.add_field(
+                name="✅ 下一步行動",
+                value=action_items,
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="✅ 下一步",
+                value="• 使用 `/analyze` 上傳今日餐點\n"
+                      "• 使用 `/history` 查看飲食記錄\n"
+                      "• 持續記錄以獲得更精準建議",
+                inline=False
+            )
+        
+        embed.set_footer(text="💡 建議會根據您的飲食記錄持續優化")
+        
+        await interaction.edit_original_response(content=None, embed=embed)
+        
+        logger.info(
+            f"用戶 {user_id} 請求個人化推薦 - "
+            f"餐次: {meal_type}, 天數: {天數}, 歷史記錄: {len(all_history) if all_history else 0} 筆"
+        )
+        
+    except Exception as e:
+        logger.error(f"Recommend命令錯誤 - 用戶: {interaction.user.id}, 錯誤: {str(e)}")
+        
+        try:
+            await interaction.edit_original_response(
+                content="❌ **生成建議時發生錯誤**\n請稍後再試,或聯繫管理員。"
+            )
+        except:
+            try:
+                await interaction.followup.send("❌ 生成建議時發生錯誤,請稍後再試。")
+            except:
+                pass
+
+
 @bot.tree.command(name='ask', description='向營養師提問')
 async def ask_nutritionist(interaction: discord.Interaction, 問題: str):
     """
@@ -939,18 +1298,6 @@ async def hello_command(interaction: discord.Interaction):
     embed.set_footer(text="讓我們一起建立健康的飲食習慣！ 🥗")
     
     await interaction.response.send_message(embed=embed)
-
-# 未來功能的斜槓命令架構
-
-# @bot.tree.command(name='history', description='查看您的飲食歷史記錄')
-# async def view_history(interaction: discord.Interaction, 天數: int = 7):
-#     """查看用戶飲食歷史 - 未來功能"""
-#     await interaction.response.send_message("🚧 此功能正在開發中，敬請期待！", ephemeral=True)
-
-# @bot.tree.command(name='recommend', description='獲得基於歷史的飲食建議')  
-# async def get_recommendation(interaction: discord.Interaction):
-#     """獲得 AI 推薦 - 未來功能"""
-#     await interaction.response.send_message("🚧 此功能正在開發中，敬請期待！", ephemeral=True)
 
 
 # ==================== 機器人啟動函數 ====================

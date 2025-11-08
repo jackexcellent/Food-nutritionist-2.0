@@ -36,8 +36,8 @@ current_dir = Path(__file__).parent
 project_root = current_dir.parent
 sys.path.insert(0, str(current_dir))
 
-from utils import handle_error
-from data_storage import get_history, get_statistics
+from utils import handle_error, format_retrieved_text
+from data_storage import get_history, get_statistics, get_previous_meals, get_past_days
 
 # 嘗試導入 Gemini SDK
 try:
@@ -86,6 +86,60 @@ class PromptTemplates:
     3. 支援未來的 prompt 工程優化
     4. 包含營養學專業知識
     """
+    
+    # RAG 增強推薦 Prompt (MVP 版本)
+    RAG_RECOMMENDATION = """
+你是一位專業的營養師，請根據用戶的飲食歷史和當前餐點提供健康建議。
+
+{retrieved_text}
+
+當前餐點資訊：
+- 餐次類型：{meal_type}
+- 食物：{current_foods}
+- 總熱量：{current_calories} kcal
+
+請提供結構化的分析和建議，格式如下：
+
+🔍 **飲食分析**：
+[分析用戶今日已攝取的食物和熱量，結合歷史模式評估]
+
+💡 **健康建議**：
+[基於當前餐點和歷史資料，提供3-5個具體的改善建議，特別針對下一餐或未來幾天的飲食計畫]
+
+🍎 **推薦食物**：
+[推薦3-5種適合下一餐的食物，說明營養價值和為何適合]
+
+⚠️ **注意事項**：
+[提醒需要注意的飲食習慣或今日需要補充的營養素]
+
+請用繁體中文回答，建議要實用且易於執行。
+"""
+    
+    # 無歷史記錄時的 Fallback Prompt
+    NO_HISTORY_RECOMMENDATION = """
+你是一位專業的營養師。用戶目前沒有飲食歷史記錄，但剛剛記錄了一餐。
+
+當前餐點資訊：
+- 餐次類型：{meal_type}
+- 食物：{current_foods}
+- 總熱量：{current_calories} kcal
+
+請提供結構化的分析和建議，格式如下：
+
+🔍 **飲食分析**：
+[分析這餐的營養組成和熱量是否合理]
+
+💡 **健康建議**：
+[提供3-5個針對這餐的評估和未來建議]
+
+🍎 **推薦食物**：
+[推薦適合搭配或下一餐的食物]
+
+⚠️ **注意事項**：
+[一般性的健康飲食提醒]
+
+請用繁體中文回答，建議要實用且易於執行。
+"""
     
     # 基礎推薦 Prompt (MVP 版本)
     BASIC_RECOMMENDATION = """
@@ -162,16 +216,22 @@ class PromptTemplates:
 # ========== 核心推薦引擎 ==========
 
 def get_recommendation(user_id: str, 
+                      meal_type: str = 'meal',
+                      current_foods: Optional[Dict[str, float]] = None,
+                      current_calories: float = 0.0,
                       days: int = 7,
                       use_advanced: bool = False) -> str:
     """
-    生成個人化飲食推薦
+    生成個人化飲食推薦 (RAG 增強版)
     
-    基於用戶的飲食歷史，使用 AI 分析並生成健康建議。
-    優先使用 Gemini LLM，失敗時使用規則型 fallback。
+    基於用戶的飲食歷史和當前餐點，使用 RAG (Retrieval-Augmented Generation)
+    方法檢索相關歷史記錄，結合 AI 分析生成更精準的個人化建議。
     
     Args:
         user_id: 用戶唯一識別碼
+        meal_type: 當前餐次類型 (breakfast/lunch/dinner/snack/latenight/other)
+        current_foods: 當前餐點的食物字典 {food_name: calories}
+        current_calories: 當前餐點總熱量
         days: 分析最近幾天的資料，預設 7 天
         use_advanced: 是否使用進階分析模式 (未來功能)
     
@@ -181,29 +241,44 @@ def get_recommendation(user_id: str,
     Raises:
         ValueError: 參數驗證失敗
     
-    工作流程：
-        1. 從資料庫獲取飲食歷史
-        2. 計算統計資訊
-        3. 構建結構化 prompt
-        4. 呼叫 Gemini API 生成推薦
-        5. 失敗時使用 fallback 規則
+    工作流程 (RAG Pipeline):
+        1. 檢索 (Retrieval): 從資料庫獲取相關歷史記錄
+           - get_previous_meals: 今日前序餐點
+           - get_past_days: 過去幾天的飲食統計
+        2. 格式化 (Format): 將檢索結果格式化為結構化文本
+        3. 增強 (Augmentation): 將歷史上下文與當前餐點合併到 prompt
+        4. 生成 (Generation): 呼叫 Gemini API 生成推薦
+        5. Fallback: 失敗時使用規則型推薦
     
     使用範例:
-        recommendation = get_recommendation('user_123', days=14)
-        print(recommendation)
+        recommendation = get_recommendation(
+            user_id='user_123',
+            meal_type='breakfast',
+            current_foods={'蛋餅': 250.0, '豆漿': 150.0},
+            current_calories=400.0,
+            days=7
+        )
         
-        # 輸出範例:
-        # 🔍 **飲食分析**：
-        # 您的飲食較偏向高熱量食物...
-        # 
-        # 💡 **健康建議**：
-        # 1. 增加蔬菜攝取...
-    
-    未來擴展：
-        - 添加個人化目標 (減重、增肌、維持)
-        - 整合運動資料
-        - 考慮季節性食材推薦
-        - 地區飲食習慣適應
+    未來擴展 (註解):
+        - 使用 sentence-transformers 生成歷史和 prompt 的向量嵌入
+        - 計算 cosine 相似度，篩選最相關的歷史記錄
+        - 添加 FAISS 向量索引加速檢索
+        - 實現語義搜尋而非簡單的時間序列檢索
+        
+        示例代碼 (未來):
+        ```python
+        from sentence_transformers import SentenceTransformer
+        import faiss
+        
+        # 生成查詢嵌入
+        model = SentenceTransformer('distiluse-base-multilingual-cased-v2')
+        query_text = f"{meal_type} {list(current_foods.keys())}"
+        query_embedding = model.encode([query_text])[0]
+        
+        # 在向量索引中搜尋相似記錄
+        D, I = index.search(query_embedding.reshape(1, -1), k=5)
+        relevant_meals = [history[idx] for idx in I[0]]
+        ```
     """
     # 參數驗證
     if not user_id:
@@ -212,43 +287,170 @@ def get_recommendation(user_id: str,
     if days <= 0:
         raise ValueError("days 必須大於 0")
     
+    # 預設值設定
+    if current_foods is None:
+        current_foods = {}
+    
     try:
-        # 1. 獲取飲食歷史資料
-        history = get_history(user_id, days)
+        logger.info(f"開始生成 RAG 推薦: user_id={user_id}, meal_type={meal_type}, calories={current_calories}")
         
-        if not history:
-            logger.info(f"用戶 {user_id} 無飲食歷史記錄")
-            return _generate_no_history_message()
+        # ===== 步驟1: 檢索相關歷史記錄 (Retrieval) =====
         
-        # 2. 獲取統計資訊
-        stats = get_statistics(user_id, days)
+        # 檢索今日前序餐點
+        previous_meals = []
+        try:
+            # 驗證 meal_type，無效值轉換為 'other'
+            valid_meal_types = {'breakfast', 'lunch', 'dinner', 'snack', 'latenight', 'other'}
+            validated_meal_type = meal_type if meal_type in valid_meal_types else 'other'
+            
+            if validated_meal_type != meal_type:
+                logger.info(f"meal_type '{meal_type}' 不在有效清單中，已轉換為 'other'")
+            
+            previous_meals = get_previous_meals(user_id, validated_meal_type)
+            logger.debug(f"檢索到 {len(previous_meals)} 筆前序餐點")
+        except ValueError as e:
+            # 若仍然發生 ValueError，嘗試用 'other' 重試
+            logger.warning(f"檢索前序餐點失敗 (meal_type={meal_type}): {e}，嘗試使用 'other' 重試")
+            try:
+                previous_meals = get_previous_meals(user_id, 'other')
+                logger.debug(f"使用 'other' 重試成功，檢索到 {len(previous_meals)} 筆前序餐點")
+            except Exception as retry_error:
+                logger.error(f"使用 'other' 重試仍失敗: {retry_error}")
+        except Exception as e:
+            logger.warning(f"檢索前序餐點失敗: {e}")
         
-        # 3. 準備資料用於 prompt
-        history_data = _format_history_for_prompt(history)
+        # 檢索過去幾天的統計分析
+        past_analysis = None
+        try:
+            past_analysis = get_past_days(user_id, days=days)
+            logger.debug(f"檢索到過去 {days} 天的分析資料")
+        except Exception as e:
+            logger.warning(f"檢索歷史統計失敗: {e}")
         
-        logger.info(f"開始生成推薦: user_id={user_id}, records={len(history)}, days={days}")
+        # ===== 步驟2: 格式化檢索結果 (Format) =====
         
-        # 4. 優先嘗試 Gemini API
+        retrieved_text = format_retrieved_text(
+            previous_meals=previous_meals,
+            past_analysis=past_analysis,
+            days=days
+        )
+        
+        logger.debug(f"格式化檢索文本長度: {len(retrieved_text)} 字元")
+        
+        # ===== 步驟3 & 4: 構建 Prompt 並生成推薦 (Augmentation & Generation) =====
+        
+        # 優先嘗試 Gemini API
         if gemini_client:
             try:
-                recommendation = _generate_ai_recommendation(
-                    history_data, stats, use_advanced
+                recommendation = _generate_rag_recommendation(
+                    retrieved_text=retrieved_text,
+                    meal_type=meal_type,
+                    current_foods=current_foods,
+                    current_calories=current_calories,
+                    has_history=(len(previous_meals) > 0 or past_analysis is not None)
                 )
-                logger.info("成功使用 Gemini AI 生成推薦")
+                logger.info("成功使用 Gemini RAG 生成推薦")
                 return recommendation
                 
             except Exception as e:
                 logger.warning(f"Gemini API 呼叫失敗: {e}")
                 # 繼續執行 fallback
         
-        # 5. Fallback 到規則型推薦
+        # ===== 步驟5: Fallback 到規則型推薦 =====
+        
         logger.info("使用規則型 fallback 生成推薦")
-        return _generate_rule_based_recommendation(history_data, stats, days)
+        return _generate_rule_based_rag_recommendation(
+            retrieved_text=retrieved_text,
+            meal_type=meal_type,
+            current_foods=current_foods,
+            current_calories=current_calories
+        )
         
     except Exception as e:
-        error_msg = f"生成推薦失敗: user_id={user_id}"
+        error_msg = f"生成 RAG 推薦失敗: user_id={user_id}"
         handle_error(e, error_msg, logger=logger, raise_error=False)
         return _generate_error_fallback()
+
+
+def _generate_rag_recommendation(retrieved_text: str,
+                                meal_type: str,
+                                current_foods: Dict[str, float],
+                                current_calories: float,
+                                has_history: bool = True) -> str:
+    """
+    使用 Gemini AI 生成 RAG 增強推薦
+    
+    將檢索到的歷史上下文與當前餐點資訊合併，
+    構建結構化 prompt 並呼叫 Gemini API。
+    
+    Args:
+        retrieved_text: 格式化的歷史檢索結果
+        meal_type: 餐次類型
+        current_foods: 當前食物字典
+        current_calories: 當前總熱量
+        has_history: 是否有歷史記錄
+    
+    Returns:
+        str: AI 生成的推薦文字
+    
+    Raises:
+        Exception: API 呼叫失敗或回應解析錯誤
+    """
+    # 格式化當前食物清單
+    foods_str = ", ".join([f"{name}({cal:.1f} kcal)" for name, cal in current_foods.items()])
+    
+    # 餐次類型中文映射
+    meal_type_zh = {
+        'breakfast': '早餐',
+        'lunch': '午餐',
+        'dinner': '晚餐',
+        'snack': '點心',
+        'latenight': '宵夜',
+        'other': '其他',
+        'meal': '餐點'
+    }.get(meal_type, meal_type)
+    
+    # 選擇 prompt 模板
+    if has_history:
+        prompt_template = PromptTemplates.RAG_RECOMMENDATION
+        prompt = prompt_template.format(
+            retrieved_text=retrieved_text,
+            meal_type=meal_type_zh,
+            current_foods=foods_str or "無",
+            current_calories=current_calories
+        )
+    else:
+        # 無歷史記錄時使用 fallback prompt
+        prompt_template = PromptTemplates.NO_HISTORY_RECOMMENDATION
+        prompt = prompt_template.format(
+            meal_type=meal_type_zh,
+            current_foods=foods_str or "無",
+            current_calories=current_calories
+        )
+    
+    logger.debug(f"構建的 RAG prompt 長度: {len(prompt)} 字元")
+    
+    # 呼叫 Gemini API
+    try:
+        response = gemini_client.generate_content(prompt)
+        
+        # 檢查回應
+        if not response.text:
+            raise ValueError("Gemini API 回傳空白回應")
+        
+        recommendation = response.text.strip()
+        
+        # 驗證回應品質
+        if len(recommendation) < 50:
+            raise ValueError("Gemini API 回應過短，可能品質不佳")
+        
+        logger.debug(f"Gemini API 回應長度: {len(recommendation)} 字元")
+        
+        return recommendation
+        
+    except Exception as e:
+        logger.error(f"Gemini API 處理失敗: {e}")
+        raise
 
 
 def _format_history_for_prompt(history: List[Tuple]) -> Dict[str, Any]:
@@ -388,9 +590,87 @@ def _generate_ai_recommendation(history_data: Dict[str, Any],
         raise
 
 
-def _generate_rule_based_recommendation(history_data: Dict[str, Any], 
-                                      stats: Dict[str, Any],
-                                      days: int) -> str:
+def _generate_rule_based_rag_recommendation(retrieved_text: str,
+                                           meal_type: str,
+                                           current_foods: Dict[str, float],
+                                           current_calories: float) -> str:
+    """
+    生成規則型 RAG 推薦 (Fallback 機制)
+    
+    當 AI API 不可用時，使用預定義規則結合檢索結果生成推薦。
+    
+    Args:
+        retrieved_text: 格式化的歷史檢索結果
+        meal_type: 餐次類型
+        current_foods: 當前食物字典
+        current_calories: 當前總熱量
+    
+    Returns:
+        str: 規則型推薦文字
+    """
+    # 餐次類型中文映射
+    meal_type_zh = {
+        'breakfast': '早餐',
+        'lunch': '午餐',
+        'dinner': '晚餐',
+        'snack': '點心',
+        'latenight': '宵夜',
+        'other': '其他',
+        'meal': '餐點'
+    }.get(meal_type, meal_type)
+    
+    # 格式化當前食物
+    foods_str = ", ".join([f"{name}({cal:.1f} kcal)" for name, cal in current_foods.items()])
+    
+    # 構建基礎推薦
+    recommendation = f"""
+🔍 **飲食分析**：
+
+當前餐點：{meal_type_zh}
+食物：{foods_str or "無"}
+總熱量：{current_calories:.1f} kcal
+
+{retrieved_text}
+
+💡 **健康建議**：
+"""
+    
+    # 基於當前熱量的建議
+    if current_calories > 600:
+        recommendation += "1. 這餐熱量較高，下一餐建議選擇較清淡的食物\n"
+    elif current_calories < 200:
+        recommendation += "1. 這餐熱量較低，下一餐可適量增加營養\n"
+    else:
+        recommendation += "1. 這餐熱量適中，繼續保持均衡飲食\n"
+    
+    # 基於餐次類型的建議
+    if meal_type == 'breakfast':
+        recommendation += "2. 早餐要吃好，建議包含蛋白質和碳水化合物\n"
+        recommendation += "3. 午餐可以增加蔬菜和優質蛋白質\n"
+    elif meal_type == 'lunch':
+        recommendation += "2. 午餐已用完，晚餐建議清淡一些\n"
+        recommendation += "3. 晚餐可以選擇魚類或雞肉配蔬菜\n"
+    elif meal_type == 'dinner':
+        recommendation += "2. 晚餐不宜過飽，建議在睡前3小時用餐\n"
+        recommendation += "3. 明日早餐建議營養豐富，開啟美好一天\n"
+    else:
+        recommendation += "2. 保持規律的用餐時間\n"
+        recommendation += "3. 注意三餐均衡，避免暴飲暴食\n"
+    
+    # 添加一般建議
+    recommendation += """
+🍎 **推薦食物**：
+- 蔬菜類：花椰菜、菠菜、番茄（提供維生素和纖維）
+- 蛋白質：雞胸肉、魚類、豆腐（提供優質蛋白）
+- 碳水化合物：糙米、地瓜、燕麥（提供持久能量）
+
+⚠️ **注意事項**：
+- 多喝水，保持每日 2000ml 以上
+- 減少高糖、高鹽、高油食物
+- 保持規律運動習慣
+"""
+    
+    return recommendation
     """
     生成規則型推薦 (Fallback 機制)
     

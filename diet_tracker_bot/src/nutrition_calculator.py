@@ -41,6 +41,14 @@ except ImportError:
     import difflib
     logging.warning("fuzzywuzzy 未安裝，使用 difflib 作為替代。建議執行: pip install fuzzywuzzy python-Levenshtein")
 
+# Gemini LLM 支援
+try:
+    import google.generativeai as genai
+    GEMINI_AVAILABLE = True
+except ImportError:
+    GEMINI_AVAILABLE = False
+    logging.warning("google-generativeai 未安裝，LLM 估算功能將不可用")
+
 # 導入專案共用工具
 current_dir = Path(__file__).parent
 project_root = current_dir.parent
@@ -60,6 +68,7 @@ TFND_DATA_PATH = project_root / "data" / "tfnd_2024_fixed.json"
 USDA_API_BASE_URL = "https://api.nal.usda.gov/fdc/v1"
 FUZZY_MATCH_THRESHOLD = 80  # 模糊匹配閾值（0-100）
 DEFAULT_CALORIES = 0  # 找不到資料時的預設熱量
+GEMINI_MODEL = "gemini-2.0-flash"  # Gemini 模型名稱
 
 
 class NutritionCalculator:
@@ -82,9 +91,21 @@ class NutritionCalculator:
         """初始化營養計算器"""
         self.tfnd_data = None
         self.usda_api_key = os.getenv('USDA_KEY')
+        self.gemini_api_key = os.getenv('GEMINI_KEY')
+        self.gemini_client = None
         
         # 載入TFND資料庫
         self._load_tfnd_database()
+        
+        # 初始化 Gemini 客戶端
+        if GEMINI_AVAILABLE and self.gemini_api_key:
+            try:
+                genai.configure(api_key=self.gemini_api_key)
+                self.gemini_client = genai.GenerativeModel(GEMINI_MODEL)
+                logger.info("Gemini LLM 客戶端初始化成功（用於熱量估算）")
+            except Exception as e:
+                logger.warning(f"Gemini 客戶端初始化失敗: {e}")
+                self.gemini_client = None
     
     def _load_tfnd_database(self) -> None:
         """
@@ -187,11 +208,21 @@ class NutritionCalculator:
                     calories = self._query_usda_api(clean_food_name)
                     source = 'USDA'
                 
-                # === 步驟4: 存入快取供未來使用 ===
-                set_cached_nutrition(clean_food_name, calories, source)
+                # === 步驟4: 如果USDA也失敗，使用LLM估算 ===
+                if calories == 0:
+                    logger.info(f"USDA未找到 '{clean_food_name}'，嘗試使用LLM估算")
+                    calories = self._estimate_calories_with_llm(clean_food_name)
+                    source = 'LLM估算'
                 
-                nutrition_dict[food_name] = calories
-                logger.info(f"✅ {food_name}: {calories:.1f} kcal (來源: {source})")
+                # === 步驟5: 只有在找到有效熱量時才存入快取和顯示 ===
+                if calories > 0:
+                    set_cached_nutrition(clean_food_name, calories, source)
+                    nutrition_dict[food_name] = calories
+                    logger.info(f"✅ {food_name}: {calories:.1f} kcal (來源: {source})")
+                else:
+                    # 找不到任何資料，不顯示該食物
+                    logger.warning(f"⚠️ {food_name}: 無法從任何來源獲取熱量資訊，已跳過")
+                    # 不加入 nutrition_dict，這樣就不會顯示數字
                 
             except Exception as e:
                 handle_error(e, f"查詢食物 '{food_name}' 的營養資訊", 
@@ -440,6 +471,78 @@ class NutritionCalculator:
             return 0
         except Exception as e:
             handle_error(e, f"處理USDA API回應失敗: {food_name}", 
+                        logger=logger, raise_error=False)
+            return 0
+    
+    def _estimate_calories_with_llm(self, food_name: str) -> float:
+        """
+        使用 LLM (Gemini) 估算食物熱量
+        
+        當 TFND 和 USDA 都找不到食物時的最後手段。
+        使用 LLM 根據常識和訓練數據估算該食物的熱量。
+        
+        Args:
+            food_name (str): 食物名稱
+        
+        Returns:
+            float: 估算的熱量(kcal/100g)，估算失敗時返回0
+        """
+        if not self.gemini_client:
+            logger.warning("Gemini 客戶端未初始化，無法使用LLM估算熱量")
+            return 0
+        
+        try:
+            # 構建 prompt
+            prompt = f"""你是一位專業的營養師。請估算以下食物每100克的熱量（kcal）。
+
+食物名稱：{food_name}
+
+請只回答一個數字（熱量值），不要包含任何其他文字、單位或說明。
+如果你無法估算或不確定這是什麼食物，請回答 "0"。
+
+範例：
+- 如果是雞胸肉，回答：165
+- 如果是蘋果，回答：52
+- 如果是白飯，回答：130
+- 如果不認識的食物，回答：0
+
+現在請估算 "{food_name}" 的熱量（kcal/100g）："""
+            
+            logger.debug(f"使用 LLM 估算熱量: {food_name}")
+            
+            # 調用 Gemini API
+            response = self.gemini_client.generate_content(prompt)
+            
+            if not response or not response.text:
+                logger.warning(f"LLM 未返回有效回應: {food_name}")
+                return 0
+            
+            # 解析回應（應該只是一個數字）
+            calorie_text = response.text.strip()
+            
+            # 嘗試提取數字
+            import re
+            numbers = re.findall(r'\d+\.?\d*', calorie_text)
+            
+            if numbers:
+                calories = float(numbers[0])
+                
+                # 驗證合理性（熱量應該在 0-900 kcal/100g 之間）
+                if 0 < calories <= 900:
+                    logger.info(f"✓ LLM估算: '{food_name}' -> {calories:.1f} kcal/100g")
+                    return calories
+                elif calories == 0:
+                    logger.info(f"✗ LLM無法估算: '{food_name}' (回應: {calorie_text})")
+                    return 0
+                else:
+                    logger.warning(f"LLM估算值異常: '{food_name}' -> {calories} kcal (超出合理範圍)")
+                    return 0
+            else:
+                logger.warning(f"無法從LLM回應中提取數字: '{food_name}' (回應: {calorie_text})")
+                return 0
+            
+        except Exception as e:
+            handle_error(e, f"LLM估算熱量失敗: {food_name}", 
                         logger=logger, raise_error=False)
             return 0
 

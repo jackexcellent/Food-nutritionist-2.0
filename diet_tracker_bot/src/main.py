@@ -8,7 +8,7 @@ Diet Tracker Bot - 主程式入口點
 2. **CLI 測試模式**：命令列介面，用於開發和測試
 
 MVP功能：
-1. Discord Bot：完整的機器人界面，支援 /track 命令
+1. Discord Bot：完整的機器人界面，支援 /analyze 命令
 2. CLI 測試：直接測試圖像到熱量的完整流程
 3. 圖像處理：使用Azure Computer Vision識別食物
 4. 營養計算：從TFND資料庫和USDA API查詢熱量
@@ -485,10 +485,13 @@ def run_discord_bot():
     try:
         from discord_bot import run_bot
         
-        print("🤖 啟動 Discord 飲食追蹤機器人...")
-        print("📝 使用 /track 命令開始追蹤飲食")
-        print("🔗 邀請機器人到您的伺服器並開始使用！")
-        print("⚠️  按 Ctrl+C 停止機器人\n")
+        # 設定日誌級別為 DEBUG 以顯示詳細執行過程
+        logger = setup_logging('DEBUG')
+        
+        logger.info("🤖 啟動 Discord 飲食追蹤機器人...")
+        logger.info("📝 使用 /analyze 命令開始追蹤飲食")
+        logger.info("🔗 邀請機器人到您的伺服器並開始使用！")
+        logger.info("⚠️  按 Ctrl+C 停止機器人\n")
         
         # 初始化資料庫
         init_database()

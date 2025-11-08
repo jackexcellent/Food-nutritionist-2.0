@@ -1497,6 +1497,303 @@ pytest tests/test_recommendation_engine.py::TestPromptTemplates -v         # Pro
 - ✅ 參數驗證與邊界條件
 - ✅ 效能測試（大量歷史資料）
 - ✅ 完整工作流程整合測試
+- ✅ RAG 檢索與增強測試 (新增)
+
+---
+
+## 🔍 RAG (Retrieval-Augmented Generation) 推薦系統 (已完成)
+
+**實現基於檢索增強生成的智能推薦系統，結合歷史記錄和當前餐點提供更精準的個人化建議。**
+
+### RAG 系統概述
+
+RAG (Retrieval-Augmented Generation) 是一種結合檢索和生成的 AI 技術，通過檢索相關歷史資料來增強 LLM 的生成能力，提供更準確和個人化的推薦。
+
+#### RAG Pipeline 流程
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                    RAG 推薦系統架構                            │
+└──────────────────────────────────────────────────────────────┘
+
+1️⃣ 檢索階段 (Retrieval)
+   ┌─────────────────────────────────────┐
+   │ • get_previous_meals(user_id, meal_type) │
+   │   → 檢索今日前序餐點              │
+   │ • get_past_days(user_id, days=7)  │
+   │   → 檢索過去幾天統計分析          │
+   └─────────────┬───────────────────────┘
+                 │ 原始歷史資料
+                 ▼
+2️⃣ 格式化階段 (Format)
+   ┌─────────────────────────────────────┐
+   │ format_retrieved_text()            │
+   │ • 格式化前序餐點清單               │
+   │ • 格式化營養統計資訊               │
+   │ • 計算今日已攝取熱量               │
+   └─────────────┬───────────────────────┘
+                 │ 結構化檢索文本
+                 ▼
+3️⃣ 增強階段 (Augmentation)
+   ┌─────────────────────────────────────┐
+   │ 構建 RAG Prompt                    │
+   │ • 合併歷史上下文                   │
+   │ • 添加當前餐點資訊                 │
+   │ • 嵌入個人化指令                   │
+   └─────────────┬───────────────────────┘
+                 │ 增強型 Prompt
+                 ▼
+4️⃣ 生成階段 (Generation)
+   ┌─────────────────────────────────────┐
+   │ Gemini API 生成推薦                │
+   │ • 基於完整上下文生成               │
+   │ • 結構化輸出格式                   │
+   │ • 個人化飲食建議                   │
+   └─────────────────────────────────────┘
+```
+
+### 核心功能實作
+
+#### 1. RAG 增強推薦函數
+
+```python
+from src.recommendation_engine import get_recommendation
+
+# RAG 推薦 API (新版)
+recommendation = get_recommendation(
+    user_id='discord_user_123',
+    meal_type='lunch',                    # 當前餐次類型
+    current_foods={                        # 當前餐點食物
+        '雞腿便當': 650.0,
+        '珍珠奶茶': 350.0
+    },
+    current_calories=1000.0,              # 當前總熱量
+    days=7                                 # 檢索天數
+)
+
+print(recommendation)
+```
+
+**輸出範例：**
+
+```
+🔍 **飲食分析**：
+今日已攝取：早餐 400 kcal，午餐 1000 kcal，總計 1400 kcal
+根據過去 7 天平均每日 1850 kcal，今日還需攝取約 450 kcal
+
+💡 **健康建議**：
+1. 今日午餐熱量較高 (1000 kcal)，晚餐建議選擇清淡食物
+2. 已攝取較多碳水化合物，晚餐應增加蛋白質和蔬菜
+3. 避免再攝取含糖飲料，建議多喝水或無糖茶
+
+🍎 **推薦食物**：
+- 烤雞胸肉沙拉 (約 300 kcal)
+- 清蒸魚配燙青菜 (約 350 kcal)
+- 豆腐味噌湯 (約 100 kcal)
+
+⚠️ **注意事項**：
+晚餐在睡前 3 小時前完成，避免影響消化和睡眠品質
+```
+
+#### 2. 檢索結果格式化
+
+```python
+from src.utils import format_retrieved_text
+
+# 格式化檢索結果
+retrieved_text = format_retrieved_text(
+    previous_meals=previous_meals,
+    past_analysis=past_analysis,
+    days=7
+)
+
+# 輸出範例：
+"""
+飲食歷史檢索結果：
+
+今日前序餐點：
+1. 早餐 (07:30): 蛋餅(250 kcal), 豆漿(150 kcal) - 總計 400 kcal
+今日已攝取總熱量：400.0 kcal
+
+過去 7 天飲食統計：
+- 總餐數：21 餐
+- 平均每日熱量：1850.0 kcal
+- 最高每日熱量：2200.0 kcal
+- 最低每日熱量：1500.0 kcal
+- 餐次分布：
+  * 早餐: 33.3%
+  * 午餐: 33.3%
+  * 晚餐: 28.6%
+  * 點心: 4.8%
+"""
+```
+
+### RAG Prompt 模板
+
+#### 標準 RAG 推薦 Prompt
+
+```python
+RAG_RECOMMENDATION = """
+你是一位專業的營養師，請根據用戶的飲食歷史和當前餐點提供健康建議。
+
+{retrieved_text}
+
+當前餐點資訊：
+- 餐次類型：{meal_type}
+- 食物：{current_foods}
+- 總熱量：{current_calories} kcal
+
+請提供結構化的分析和建議，格式如下：
+
+🔍 **飲食分析**：
+[分析用戶今日已攝取的食物和熱量，結合歷史模式評估]
+
+💡 **健康建議**：
+[基於當前餐點和歷史資料，提供3-5個具體的改善建議，
+ 特別針對下一餐或未來幾天的飲食計畫]
+
+🍎 **推薦食物**：
+[推薦3-5種適合下一餐的食物，說明營養價值和為何適合]
+
+⚠️ **注意事項**：
+[提醒需要注意的飲食習慣或今日需要補充的營養素]
+
+請用繁體中文回答，建議要實用且易於執行。
+"""
+```
+
+### 未來擴展計畫
+
+#### 🎯 語義向量檢索 (Semantic Retrieval)
+
+當前 MVP 使用簡單的時間序列檢索，未來將整合向量嵌入技術：
+
+```python
+# 未來實作：使用 sentence-transformers 進行語義檢索
+from sentence_transformers import SentenceTransformer
+import numpy as np
+
+# 1. 初始化多語言嵌入模型
+model = SentenceTransformer('distiluse-base-multilingual-cased-v2')
+
+# 2. 生成查詢嵌入
+query_text = f"{meal_type} {list(current_foods.keys())}"
+query_embedding = model.encode([query_text])[0]
+
+# 3. 生成歷史記錄嵌入
+history_texts = [
+    f"{meal['meal_type']} {list(meal['foods'].keys())}"
+    for meal in history
+]
+history_embeddings = model.encode(history_texts)
+
+# 4. 計算 cosine 相似度
+from sklearn.metrics.pairwise import cosine_similarity
+similarities = cosine_similarity(
+    query_embedding.reshape(1, -1),
+    history_embeddings
+)[0]
+
+# 5. 篩選最相關的 top-k 記錄
+top_k = 5
+top_indices = np.argsort(similarities)[-top_k:]
+relevant_meals = [history[i] for i in top_indices]
+```
+
+#### 🚀 FAISS 向量索引加速
+
+使用 FAISS 建立高效向量索引，支援大規模檢索：
+
+```python
+# 未來實作：使用 FAISS 建立向量索引
+import faiss
+
+# 1. 建立向量索引
+dimension = 512  # 嵌入維度
+index = faiss.IndexFlatL2(dimension)
+
+# 2. 添加歷史記錄嵌入
+index.add(history_embeddings)
+
+# 3. 快速檢索最相似記錄
+D, I = index.search(query_embedding.reshape(1, -1), k=5)
+relevant_meals = [history[idx] for idx in I[0]]
+
+# 4. 基於距離加權排序
+weights = 1 / (1 + D[0])  # 距離越近權重越高
+```
+
+#### 🎨 VLM 熱量估計 (Vision Language Model)
+
+未來將整合視覺語言模型直接從圖像估計熱量：
+
+```python
+# 未來實作：使用 Gemini Vision 估計熱量
+import google.generativeai as genai
+
+# 1. 上傳食物圖像
+image_file = genai.upload_file(path="food_image.jpg")
+
+# 2. 構建視覺 prompt
+vision_prompt = """
+請分析這張食物圖片，估計以下資訊：
+
+1. 識別圖片中的所有食物
+2. 估計每種食物的份量（公克）
+3. 計算每種食物的熱量（kcal）
+4. 提供總熱量估計
+
+請以 JSON 格式回應：
+{
+  "foods": [
+    {"name": "白米飯", "portion_g": 200, "calories": 280},
+    {"name": "煎雞排", "portion_g": 150, "calories": 320}
+  ],
+  "total_calories": 600
+}
+"""
+
+# 3. 呼叫 Gemini Vision API
+response = genai.GenerativeModel('gemini-1.5-pro-vision').generate_content([
+    vision_prompt,
+    image_file
+])
+
+# 4. 解析回應
+nutrition_data = json.loads(response.text)
+```
+
+**優勢：**
+
+- 無需手動輸入食物
+- 自動份量估計
+- 減少用戶操作步驟
+- 提升用戶體驗
+
+**挑戰：**
+
+- VLM 準確度
+- API 成本控制
+- 回應時間優化
+
+### 測試與驗證
+
+```bash
+# 執行 RAG 功能測試
+pytest tests/test_recommendation_engine.py::TestRAGFeatures -v
+
+# 執行完整推薦引擎測試（包含 RAG）
+pytest tests/test_recommendation_engine.py -v --cov=src/recommendation_engine
+```
+
+**測試涵蓋：**
+
+- ✅ RAG 檢索功能測試
+- ✅ 格式化函數測試
+- ✅ Prompt 構建測試
+- ✅ 端到端 RAG 流程測試
+- ✅ Fallback 機制測試
+- ✅ 錯誤處理測試
 
 ---
 

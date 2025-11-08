@@ -571,6 +571,210 @@ def log_cache_operation(operation: str, key: str, hit: bool = None, logger: logg
     else:
         logger.info(f"🗃️  快取操作: {operation} -> {key}")
 
+# ========== RAG 檢索結果格式化 ==========
+
+def format_retrieved_text(previous_meals: list, 
+                          past_analysis: Optional[dict] = None,
+                          days: int = 7) -> str:
+    """
+    格式化 RAG 檢索結果為結構化文本
+    
+    將從資料庫檢索的歷史記錄和統計分析格式化為
+    易於 LLM 理解的結構化文本，用於 prompt 增強。
+    
+    Args:
+        previous_meals: 前序餐點列表 (來自 get_previous_meals)
+        past_analysis: 過去幾天的分析資料 (來自 get_past_days)
+        days: 分析天數
+    
+    Returns:
+        str: 格式化的檢索結果文本
+    
+    文本格式範例:
+        ```
+        飲食歷史檢索結果：
+        
+        今日前序餐點：
+        1. 早餐 (07:30): 蛋餅(250 kcal), 豆漿(150 kcal) - 總計 400 kcal
+        2. 午餐 (12:15): 雞腿便當(650 kcal) - 總計 650 kcal
+        今日已攝取總熱量：1050 kcal
+        
+        過去 7 天飲食統計：
+        - 總餐數：21 餐
+        - 平均每日熱量：1850 kcal
+        - 最高每日熱量：2200 kcal
+        - 最低每日熱量：1500 kcal
+        - 最常吃的食物：白米飯(12次), 雞胸肉(8次), 花椰菜(6次)
+        ```
+    
+    未來擴展 (註解):
+        使用向量嵌入進行語義相似度篩選：
+        
+        ```python
+        from sentence_transformers import SentenceTransformer
+        import numpy as np
+        
+        # 初始化多語言模型
+        model = SentenceTransformer('distiluse-base-multilingual-cased-v2')
+        
+        # 生成當前查詢的嵌入
+        query_text = f"建議下一餐吃什麼"
+        query_embedding = model.encode([query_text])[0]
+        
+        # 為每筆歷史記錄生成嵌入
+        history_texts = [
+            f"{meal['meal_type']} {list(meal['foods'].keys())}"
+            for meal in previous_meals
+        ]
+        history_embeddings = model.encode(history_texts)
+        
+        # 計算 cosine 相似度
+        from sklearn.metrics.pairwise import cosine_similarity
+        similarities = cosine_similarity(
+            query_embedding.reshape(1, -1),
+            history_embeddings
+        )[0]
+        
+        # 篩選最相關的 top-k 記錄
+        top_k = 5
+        top_indices = np.argsort(similarities)[-top_k:]
+        relevant_meals = [previous_meals[i] for i in top_indices]
+        
+        # 只格式化最相關的記錄
+        return format_relevant_meals(relevant_meals)
+        ```
+        
+        使用 FAISS 加速向量檢索：
+        
+        ```python
+        import faiss
+        
+        # 建立向量索引
+        dimension = 512  # 嵌入維度
+        index = faiss.IndexFlatL2(dimension)
+        
+        # 添加歷史記錄嵌入到索引
+        index.add(history_embeddings)
+        
+        # 快速檢索最相似的 k 個記錄
+        D, I = index.search(query_embedding.reshape(1, -1), k=5)
+        relevant_meals = [previous_meals[idx] for idx in I[0]]
+        ```
+    """
+    logger = logging.getLogger(__name__)
+    
+    # 初始化輸出文本
+    output = "飲食歷史檢索結果：\n\n"
+    
+    # ===== 格式化前序餐點 =====
+    if previous_meals and len(previous_meals) > 0:
+        output += "今日前序餐點：\n"
+        
+        total_today_calories = 0.0
+        
+        # 餐次類型中文映射
+        meal_type_zh = {
+            'breakfast': '早餐',
+            'lunch': '午餐',
+            'dinner': '晚餐',
+            'snack': '點心',
+            'latenight': '宵夜',
+            'other': '其他',
+            'meal': '餐點'
+        }
+        
+        for idx, meal in enumerate(previous_meals, 1):
+            try:
+                # 解析餐點資料 (根據 get_previous_meals 回傳格式)
+                # Tuple structure: (id, date, foods, calories, portion_size, meal_type)
+                meal_id = meal[0]
+                date_str = meal[1]
+                foods = meal[2]  # Dict[str, float]
+                calories = meal[3]  # float
+                portion_size = meal[4]  # float
+                meal_type = meal[5]  # str
+                
+                # 解析時間
+                try:
+                    date_obj = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+                    time_str = date_obj.strftime("%H:%M")
+                except:
+                    time_str = "未知時間"
+                
+                # 餐次名稱
+                meal_name = meal_type_zh.get(meal_type, meal_type)
+                
+                # 格式化食物清單
+                foods_str = ", ".join([f"{name}({cal:.1f} kcal)" for name, cal in foods.items()])
+                
+                output += f"{idx}. {meal_name} ({time_str}): {foods_str} - 總計 {calories:.1f} kcal\n"
+                total_today_calories += calories
+                
+            except Exception as e:
+                logger.warning(f"格式化餐點資料時發生錯誤: {e}")
+                continue
+        
+        output += f"今日已攝取總熱量：{total_today_calories:.1f} kcal\n\n"
+    else:
+        output += "今日尚無前序餐點記錄\n\n"
+    
+    # ===== 格式化過去幾天統計 =====
+    if past_analysis and isinstance(past_analysis, dict):
+        try:
+            output += f"過去 {days} 天飲食統計：\n"
+            
+            # 總餐數
+            total_meals = past_analysis.get('total_meals', 0)
+            output += f"- 總餐數：{total_meals} 餐\n"
+            
+            # 營養趨勢
+            trends = past_analysis.get('nutrition_trends', {})
+            if trends:
+                avg_cal = trends.get('avg_daily_calories', 0)
+                max_cal = trends.get('max_daily_calories', 0)
+                min_cal = trends.get('min_daily_calories', 0)
+                
+                output += f"- 平均每日熱量：{avg_cal:.1f} kcal\n"
+                output += f"- 最高每日熱量：{max_cal:.1f} kcal\n"
+                output += f"- 最低每日熱量：{min_cal:.1f} kcal\n"
+            
+            # 餐次類型統計
+            meal_stats = past_analysis.get('meal_type_stats', {})
+            if meal_stats:
+                output += "- 餐次分布：\n"
+                for meal_type, percentage in meal_stats.items():
+                    meal_name = {
+                        'breakfast': '早餐',
+                        'lunch': '午餐',
+                        'dinner': '晚餐',
+                        'snack': '點心',
+                        'latenight': '宵夜',
+                        'other': '其他',
+                        'meal': '餐點'
+                    }.get(meal_type, meal_type)
+                    output += f"  * {meal_name}: {percentage:.1f}%\n"
+            
+            # 每日摘要（最近3天）
+            daily_summaries = past_analysis.get('daily_summaries', [])
+            if daily_summaries and len(daily_summaries) > 0:
+                output += f"\n最近 {min(3, len(daily_summaries))} 天詳細記錄：\n"
+                for summary in daily_summaries[:3]:
+                    date = summary.get('date', '未知')
+                    meals = summary.get('meals', 0)
+                    calories = summary.get('total_calories', 0)
+                    output += f"- {date}: {meals} 餐, {calories:.1f} kcal\n"
+            
+        except Exception as e:
+            logger.warning(f"格式化過去統計時發生錯誤: {e}")
+            output += "過去統計資料格式化失敗\n"
+    else:
+        output += f"過去 {days} 天無足夠統計資料\n"
+    
+    logger.debug(f"格式化檢索文本完成，長度: {len(output)} 字元")
+    
+    return output
+
+
 # ========== 性能測試輔助函數 ==========
 
 def simulate_multi_user_load(users: int = 10, requests_per_user: int = 5):
