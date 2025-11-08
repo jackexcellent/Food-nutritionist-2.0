@@ -136,19 +136,27 @@ bot = DietTrackerBot()
 @bot.tree.command(name='analyze', description='上傳食物圖片進行營養分析和追蹤')
 async def analyze_food(interaction: discord.Interaction, 圖片: discord.Attachment):
     """
-    /analyze 斜槓命令 - MVP 核心功能
+    /analyze 斜槓命令 - MVP 核心功能（含餐次詢問）
     
     處理用戶上傳的食物圖片，進行以下流程：
     1. 檢查附件 (圖片)
     2. 食物識別 (image_processor)
-    3. 營養分析 (nutrition_calculator)
-    4. 儲存記錄 (data_storage)
-    5. AI 推薦 (recommendation_engine)
-    6. 回傳結構化結果
+    3. 📋 詢問餐次類型 (breakfast/lunch/dinner/snack)
+    4. 🔍 VLM 識別份量 (克)
+    5. 營養分析 (nutrition_calculator，依份量調整)
+    6. 儲存記錄 (data_storage，包含餐次和份量)
+    7. AI 推薦 (recommendation_engine)
+    8. 回傳結構化結果
     
     Args:
         interaction: Discord 斜槓命令互動
         圖片: 用戶上傳的食物圖片
+        
+    未來擴展：
+        - 🤖 使用 datetime.now().hour 自動推斷餐次
+          (<12: breakfast, 12-17: lunch, 17-21: dinner, else: snack)
+        - 🎯 學習用戶的用餐習慣自動建議餐次
+        - 📊 提供餐次統計和建議
     """
     try:
         bot.stats['total_tracks'] += 1
@@ -161,7 +169,8 @@ async def analyze_food(interaction: discord.Interaction, 圖片: discord.Attachm
                 "使用方式：\n"
                 "1. 輸入 `/analyze`\n"
                 "2. 在 `圖片` 參數中上傳食物圖片\n"
-                "3. 等待 AI 分析結果\n\n"
+                "3. 回答餐次問題（早餐/午餐/晚餐/點心）\n"
+                "4. 等待 AI 分析結果\n\n"
                 "💡 支援 JPG, PNG 等常見格式",
                 ephemeral=True
             )
@@ -195,7 +204,7 @@ async def analyze_food(interaction: discord.Interaction, 圖片: discord.Attachm
                 temp_path = temp_file.name
             
             # 步驟 1: 食物識別
-            await interaction.edit_original_response(content="🔄 **步驟 1/4: 識別食物中...**")
+            await interaction.edit_original_response(content="🔄 **步驟 1/6: 識別食物中...**")
             foods = image_processor.process_image(temp_path)
             
             if not foods:
@@ -209,8 +218,49 @@ async def analyze_food(interaction: discord.Interaction, 圖片: discord.Attachm
                 )
                 return
             
-            # 步驟 2: 營養分析
-            await interaction.edit_original_response(content="🔄 **步驟 2/4: 計算營養成分...**")
+            # 步驟 2: 詢問餐次類型
+            await interaction.edit_original_response(
+                content="🔄 **步驟 2/6: 食物識別完成！**\n\n"
+                       f"✅ 識別到的食物: {', '.join(foods)}\n\n"
+                       "📋 **請問這是什麼餐次？**\n"
+                       "請回覆：`早餐`、`午餐`、`晚餐` 或 `點心`"
+            )
+            
+            # 等待用戶回應（MVP：手動詢問，未來可自動推斷）
+            meal_type = await _ask_meal_type(interaction, user_id)
+            
+            # 取得 view 中儲存的自定義餐次名稱
+            custom_meal_name = None
+            if hasattr(bot, '_last_meal_view') and bot._last_meal_view:
+                custom_meal_name = bot._last_meal_view.custom_meal
+            
+            if not meal_type:
+                # 用戶未回應或超時，使用預設值
+                meal_type = 'meal'
+                await interaction.followup.send(
+                    "⏰ **未收到回應，使用預設餐次類型**",
+                    ephemeral=True
+                )
+            
+            # 步驟 3: VLM 識別份量
+            await interaction.edit_original_response(
+                content=f"🔄 **步驟 3/6: 正在分析食物份量...**\n\n"
+                       f"識別的食物: {', '.join(foods)}\n"
+                       f"餐次類型: {_format_meal_type_chinese(meal_type)}"
+            )
+            
+            # TODO: 使用 VLM 識別份量（暫時使用預設值）
+            # 未來擴展：整合 VLM API 進行視覺份量估計
+            portion_size = await _estimate_portion_from_image(temp_path, foods)
+            
+            # 步驟 4: 營養分析（依份量調整）
+            await interaction.edit_original_response(
+                content=f"🔄 **步驟 4/6: 計算營養成分...**\n\n"
+                       f"識別的食物: {', '.join(foods)}\n"
+                       f"餐次類型: {_format_meal_type_chinese(meal_type)}\n"
+                       f"估計份量: {portion_size:.0f}g"
+            )
+            
             nutrition_result = nutrition_calculator.get_nutrition(foods)
             
             if not nutrition_result or len(nutrition_result) != 2:
@@ -220,19 +270,47 @@ async def analyze_food(interaction: discord.Interaction, 圖片: discord.Attachm
             # 解包返回值: (營養字典, 總熱量)
             nutrition_data, total_calories = nutrition_result
             
-            # 步驟 3: 儲存記錄
-            await interaction.edit_original_response(content="🔄 **步驟 3/4: 儲存飲食記錄...**")
-            # nutrition_data 已經是 {食物名稱: 熱量} 格式
-            meal_id = data_storage.store_meal(user_id, nutrition_data, total_calories)
+            # 根據份量調整營養數據（預設為100g基準）
+            portion_factor = portion_size / 100.0
+            adjusted_nutrition_data = {
+                food: calories * portion_factor 
+                for food, calories in nutrition_data.items()
+            }
+            adjusted_total_calories = total_calories * portion_factor
             
-            # 步驟 4: 產生 AI 推薦
-            await interaction.edit_original_response(content="🔄 **步驟 4/4: 生成個人化建議...**")
+            # 步驟 5: 儲存記錄（包含餐次和份量）
+            await interaction.edit_original_response(
+                content=f"🔄 **步驟 5/6: 儲存飲食記錄...**\n\n"
+                       f"餐次: {_format_meal_type_chinese(meal_type)}\n"
+                       f"份量: {portion_size:.0f}g\n"
+                       f"熱量: {adjusted_total_calories:.0f} kcal"
+            )
+            
+            meal_id = data_storage.store_meal(
+                user_id=user_id,
+                foods=adjusted_nutrition_data,
+                calories=adjusted_total_calories,
+                meal_type=meal_type,
+                meal_type_custom=custom_meal_name,
+                portion_size=portion_size
+            )
+            
+            # 步驟 6: 產生 AI 推薦
+            await interaction.edit_original_response(
+                content="🔄 **步驟 6/6: 生成個人化建議...**"
+            )
             recommendation = recommendation_engine.get_recommendation(user_id, days=7)
             
-            # 建構回應訊息 (包含圖片)
+            # 建構回應訊息 (包含圖片、餐次和份量資訊)
             embed_response = _format_track_response(
-                foods, nutrition_data, total_calories, recommendation, meal_id, 
-                image_url=attachment.url
+                foods=foods,
+                nutrition_data=adjusted_nutrition_data,
+                total_calories=adjusted_total_calories,
+                recommendation=recommendation,
+                meal_id=meal_id,
+                image_url=attachment.url,
+                meal_type=meal_type,
+                portion_size=portion_size
             )
             
             # 發送最終結果
@@ -241,7 +319,10 @@ async def analyze_food(interaction: discord.Interaction, 圖片: discord.Attachm
             # 更新統計
             bot.stats['successful_analyses'] += 1
             
-            logger.info(f"成功處理追蹤請求 - 用戶: {user_id}, 食物: {foods}, 熱量: {total_calories}")
+            logger.info(
+                f"成功處理追蹤請求 - 用戶: {user_id}, 食物: {foods}, "
+                f"餐次: {meal_type}, 份量: {portion_size}g, 熱量: {adjusted_total_calories:.0f}"
+            )
             
         finally:
             # 清理臨時檔案
@@ -343,16 +424,230 @@ def _is_valid_image_file(filename: str) -> bool:
     return any(filename.lower().endswith(ext) for ext in valid_extensions)
 
 
+class MealTypeView(discord.ui.View):
+    """餐次選擇按鈕視圖"""
+    
+    def __init__(self):
+        super().__init__(timeout=60.0)
+        self.meal_type = None
+        self.custom_meal = None
+    
+    @discord.ui.button(label="🌅 早餐", style=discord.ButtonStyle.primary)
+    async def breakfast_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.meal_type = 'breakfast'
+        await interaction.response.send_message("✅ 已選擇：**早餐**", ephemeral=True)
+        self.stop()
+    
+    @discord.ui.button(label="🌞 午餐", style=discord.ButtonStyle.primary)
+    async def lunch_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.meal_type = 'lunch'
+        await interaction.response.send_message("✅ 已選擇：**午餐**", ephemeral=True)
+        self.stop()
+    
+    @discord.ui.button(label="🌙 晚餐", style=discord.ButtonStyle.primary)
+    async def dinner_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.meal_type = 'dinner'
+        await interaction.response.send_message("✅ 已選擇：**晚餐**", ephemeral=True)
+        self.stop()
+    
+    @discord.ui.button(label="🍿 點心", style=discord.ButtonStyle.secondary)
+    async def snack_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.meal_type = 'snack'
+        await interaction.response.send_message("✅ 已選擇：**點心**", ephemeral=True)
+        self.stop()
+    
+    @discord.ui.button(label="🌃 宵夜", style=discord.ButtonStyle.secondary)
+    async def latenight_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.meal_type = 'latenight'
+        await interaction.response.send_message("✅ 已選擇：**宵夜**", ephemeral=True)
+        self.stop()
+    
+    @discord.ui.button(label="✏️ 其他", style=discord.ButtonStyle.success, row=1)
+    async def other_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # 顯示模態框讓用戶輸入自定義餐次
+        modal = CustomMealModal()
+        await interaction.response.send_modal(modal)
+        await modal.wait()
+        
+        if modal.custom_meal:
+            self.meal_type = 'other'
+            self.custom_meal = modal.custom_meal
+        else:
+            self.meal_type = 'meal'
+        
+        self.stop()
+
+
+class CustomMealModal(discord.ui.Modal, title="自定義餐次"):
+    """自定義餐次輸入模態框"""
+    
+    meal_name = discord.ui.TextInput(
+        label="請輸入餐次名稱",
+        placeholder="例如：下午茶、早午餐、運動後補充等",
+        required=True,
+        max_length=20
+    )
+    
+    def __init__(self):
+        super().__init__()
+        self.custom_meal = None
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        self.custom_meal = self.meal_name.value
+        await interaction.response.send_message(
+            f"✅ 已選擇：**{self.custom_meal}**", 
+            ephemeral=True
+        )
+
+
+async def _ask_meal_type(interaction: discord.Interaction, user_id: str) -> Optional[str]:
+    """
+    詢問用戶餐次類型（使用按鈕選單）
+    
+    Args:
+        interaction: Discord interaction 物件
+        user_id: 用戶 ID
+    
+    Returns:
+        餐次類型 ('breakfast', 'lunch', 'dinner', 'snack', 'latenight', 'other') 或 'meal'
+    """
+    try:
+        # 創建按鈕視圖
+        view = MealTypeView()
+        
+        # 儲存到 bot 以便後續取得自定義餐次名稱
+        bot._last_meal_view = view
+        
+        # 發送選擇訊息
+        await interaction.followup.send(
+            "🍽️ **請選擇餐次類型**\n"
+            "請點擊下方按鈕選擇，或點選「其他」自行輸入",
+            view=view,
+            ephemeral=False
+        )
+        
+        # 等待用戶選擇
+        await view.wait()
+        
+        # 返回選擇結果
+        if view.meal_type:
+            return view.meal_type
+        else:
+            logger.warning(f"用戶 {user_id} 未選擇餐次類型（超時）")
+            return 'meal'  # 超時使用預設值
+            
+    except Exception as e:
+        utils.handle_error(e, "詢問餐次類型錯誤", logger=logger, raise_error=False)
+        return 'meal'
+
+
+def _parse_meal_type_input(content: str) -> Optional[str]:
+    """
+    解析用戶輸入的餐次類型
+    
+    Args:
+        content: 用戶輸入的文字（已轉小寫）
+    
+    Returns:
+        標準化的餐次類型或 None
+    """
+    # 早餐關鍵字
+    if any(keyword in content for keyword in ['早', 'breakfast', '早餐', 'morning']):
+        return 'breakfast'
+    
+    # 午餐關鍵字
+    if any(keyword in content for keyword in ['午', 'lunch', '午餐', '中餐', 'noon']):
+        return 'lunch'
+    
+    # 晚餐關鍵字
+    if any(keyword in content for keyword in ['晚', 'dinner', '晚餐', 'evening', 'supper']):
+        return 'dinner'
+    
+    # 點心關鍵字
+    if any(keyword in content for keyword in ['點', 'snack', '點心', '零食', '宵夜']):
+        return 'snack'
+    
+    return None
+
+
+def _format_meal_type_chinese(meal_type: str, custom_name: str = None) -> str:
+    """
+    將餐次類型轉換為中文顯示
+    
+    Args:
+        meal_type: 餐次類型
+        custom_name: 自定義餐次名稱（如果 meal_type 為 'other'）
+    
+    Returns:
+        中文餐次名稱
+    """
+    if meal_type == 'other' and custom_name:
+        return f'✏️ {custom_name}'
+    
+    meal_type_map = {
+        'breakfast': '🌅 早餐',
+        'lunch': '🌞 午餐',
+        'dinner': '🌙 晚餐',
+        'snack': '🍿 點心',
+        'latenight': '🌃 宵夜',
+        'meal': '🍽️ 餐點'
+    }
+    return meal_type_map.get(meal_type, '🍽️ 餐點')
+
+
+async def _estimate_portion_from_image(image_path: str, foods: List[str]) -> float:
+    """
+    從圖片估計食物份量
+    
+    MVP 版本：使用預設值 100g
+    未來擴展：整合 VLM (Vision Language Model) API 進行視覺份量估計
+    
+    Args:
+        image_path: 圖片檔案路徑
+        foods: 識別到的食物列表
+    
+    Returns:
+        估計的份量（克）
+        
+    未來 VLM 整合範例 (註解保留):
+        # 1. 使用 GPT-4V 或 Claude Vision 分析圖片
+        # 2. Prompt: "請估計圖片中食物的總重量（克）"
+        # 3. 解析 VLM 回應並返回數值
+        
+        try:
+            # 調用 VLM API
+            vlm_response = await vlm_api.analyze_portion(image_path, foods)
+            portion_grams = vlm_response.get('portion_grams', 100.0)
+            
+            # 驗證範圍 (10g - 2000g)
+            if 10 <= portion_grams <= 2000:
+                return portion_grams
+            else:
+                logger.warning(f"VLM返回異常份量: {portion_grams}g，使用預設值")
+                return 100.0
+                
+        except Exception as e:
+            utils.handle_error(e, "VLM份量估計錯誤", logger=logger, raise_error=False)
+            return 100.0
+    """
+    # MVP: 返回預設值
+    # TODO: 整合 VLM API 進行視覺份量估計
+    logger.info(f"使用預設份量 100g（未來將整合 VLM 估計）")
+    return 100.0
+
+
 def _format_track_response(
     foods: List[str], 
     nutrition_data: Dict[str, float], 
     total_calories: float,
     recommendation: str,
     meal_id: int,
-    image_url: str = None
+    image_url: str = None,
+    meal_type: str = 'meal',
+    portion_size: float = 100.0
 ) -> discord.Embed:
     """
-    格式化 track 命令的回應訊息為 Discord Embed
+    格式化 track 命令的回應訊息為 Discord Embed（含餐次和份量資訊）
     
     Args:
         foods: 識別到的食物列表
@@ -361,6 +656,8 @@ def _format_track_response(
         recommendation: AI 推薦內容
         meal_id: 餐點記錄 ID
         image_url: 用戶上傳的圖片 URL
+        meal_type: 餐次類型
+        portion_size: 份量大小（克）
     
     Returns:
         格式化的 Discord Embed 物件
@@ -376,6 +673,14 @@ def _format_track_response(
     # 如果有圖片 URL，設定為縮圖
     if image_url:
         embed.set_image(url=image_url)
+    
+    # 餐次和份量資訊
+    meal_info = f"{_format_meal_type_chinese(meal_type)} | 📏 份量: {portion_size:.0f}g"
+    embed.add_field(
+        name="🕐 餐次資訊",
+        value=meal_info,
+        inline=False
+    )
     
     # 建構食物清單
     food_list = "、".join(foods) if foods else "未識別"
@@ -547,13 +852,16 @@ async def history_command(interaction: discord.Interaction, 天數: int = 7):
         # 顯示最近的記錄（最多5筆）
         recent_records = history_records[:5]
         
-        for i, (record_id, date, foods, calories, created_at) in enumerate(recent_records):
+        for i, (record_id, date, foods, calories, created_at, meal_type, meal_type_custom) in enumerate(recent_records):
             # 解析日期
             try:
                 meal_date = datetime.fromisoformat(date.replace('Z', '+00:00'))
                 formatted_date = meal_date.strftime("%m月%d日 %H:%M")
             except:
                 formatted_date = date[:16]  # 備用格式
+            
+            # 格式化餐次類型
+            meal_display = _format_meal_type_chinese(meal_type or 'meal', meal_type_custom)
             
             # 建構食物列表
             if isinstance(foods, dict):
@@ -565,7 +873,7 @@ async def history_command(interaction: discord.Interaction, 天數: int = 7):
                 foods_text = "資料格式錯誤"
             
             embed.add_field(
-                name=f"🍽️ {formatted_date} (#{record_id})",
+                name=f"{meal_display} | {formatted_date}",
                 value=f"{foods_text}\n**總計**: {calories:.0f} kcal",
                 inline=False
             )

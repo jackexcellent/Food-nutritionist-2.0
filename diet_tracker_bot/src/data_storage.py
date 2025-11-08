@@ -125,6 +125,7 @@ def _migrate_add_meal_columns(cursor: sqlite3.Cursor) -> None:
     檢查表結構並添加遺失的欄位：
     - meal_type: 餐次類型（breakfast/lunch/dinner/snack）
     - portion_size: 份量大小，預設 100g
+    - meal_type_custom: 自訂餐次名稱
     
     Args:
         cursor: SQLite 資料庫游標
@@ -152,6 +153,14 @@ def _migrate_add_meal_columns(cursor: sqlite3.Cursor) -> None:
                 ADD COLUMN portion_size REAL DEFAULT 100.0
             """)
             logger.info("已添加 portion_size 欄位到現有資料庫")
+        
+        # 添加 meal_type_custom 欄位（如果不存在）
+        if 'meal_type_custom' not in existing_columns:
+            cursor.execute("""
+                ALTER TABLE meals 
+                ADD COLUMN meal_type_custom TEXT
+            """)
+            logger.info("已添加 meal_type_custom 欄位到現有資料庫")
             
         logger.debug(f"資料庫遷移完成，現有欄位：{existing_columns}")
         
@@ -220,6 +229,7 @@ def init_database() -> None:
                     foods TEXT NOT NULL,
                     calories REAL NOT NULL,
                     meal_type TEXT DEFAULT 'meal',
+                    meal_type_custom TEXT,
                     portion_size REAL DEFAULT 100.0,
                     created_at TEXT NOT NULL DEFAULT (datetime('now'))
                 )
@@ -261,6 +271,7 @@ def store_meal(user_id: str,
                calories: float,
                date: Optional[str] = None,
                meal_type: Optional[str] = None,
+               meal_type_custom: Optional[str] = None,
                portion_size: Optional[float] = None) -> int:
     """
     儲存用戶的一餐飲食記錄（擴展版）
@@ -270,7 +281,8 @@ def store_meal(user_id: str,
         foods: 食物字典 {食物名稱: 熱量}，例如 {'apple': 52.0, 'banana': 89.0}
         calories: 總熱量（kcal）
         date: 可選的日期時間字串（ISO 8601 格式），默認為當前時間
-        🚀 meal_type: 餐次類型 ('breakfast', 'lunch', 'dinner', 'snack')，預設 'meal'
+        🚀 meal_type: 餐次類型 ('breakfast', 'lunch', 'dinner', 'snack', 'latenight', 'other')，預設 'meal'
+        🚀 meal_type_custom: 自定義餐次名稱（當 meal_type='other' 時使用）
         🚀 portion_size: 份量大小（克），預設 100.0g
     
     Returns:
@@ -296,49 +308,18 @@ def store_meal(user_id: str,
             meal_type='breakfast',
             portion_size=200.0  # 200g
         )
-        print(f"早餐記錄已儲存，ID: {record_id}")
-    
-    未來擴展（MongoDB + Vector RAG）:
-        def store_meal_mongo_with_embedding(user_id: str, foods: Dict[str, float], 
-                                          calories: float, meal_type: str = 'meal',
-                                          meal_description: str = None) -> str:
-            '''儲存到 MongoDB + 向量嵌入'''
-            from sentence_transformers import SentenceTransformer
-            
-            # 1. 儲存結構化資料到 MongoDB
-            with get_mongo_connection() as db:
-                meals_collection = db['meals']
-                
-                meal_doc = {
-                    'user_id': user_id,
-                    'date': datetime.now().isoformat(),
-                    'foods': foods,
-                    'calories': calories,
-                    'meal_type': meal_type,
-                    'portion_size': portion_size,
-                    'meal_description': meal_description,
-                    'created_at': datetime.now()
-                }
-                
-                result = meals_collection.insert_one(meal_doc)
-                meal_id = str(result.inserted_id)
-                
-                # 2. 生成向量嵌入（用於語義檢索）
-                if meal_description:
-                    model = SentenceTransformer('all-MiniLM-L6-v2')
-                    embedding = model.encode(meal_description)
-                    
-                    # 3. 儲存向量到 Pinecone/Weaviate
-                    import pinecone
-                    index = pinecone.Index("meal-embeddings")
-                    index.upsert([(meal_id, embedding.tolist(), {
-                        'user_id': user_id,
-                        'meal_type': meal_type,
-                        'calories': calories
-                    })])
-                
-                return meal_id
+        
+        # 自定義餐次
+        record_id = store_meal(
+            user_id='user_123',
+            foods={'protein_shake': 120.0},
+            calories=120.0,
+            meal_type='other',
+            meal_type_custom='運動後補充'
+        )
+        print(f"自定義餐次記錄已儲存，ID: {record_id}")
     """
+    
     # 參數驗證
     if not user_id:
         raise ValueError("user_id 不能為空")
@@ -350,7 +331,7 @@ def store_meal(user_id: str,
         raise ValueError("calories 不能為負數")
         
     # 餐次類型驗證
-    valid_meal_types = {'breakfast', 'lunch', 'dinner', 'snack', 'meal'}
+    valid_meal_types = {'breakfast', 'lunch', 'dinner', 'snack', 'latenight', 'other', 'meal'}
     if meal_type and meal_type not in valid_meal_types:
         raise ValueError(f"meal_type 必須是 {valid_meal_types} 之一，收到: {meal_type}")
     
@@ -375,9 +356,9 @@ def store_meal(user_id: str,
             
             # 插入記錄（包含新欄位）
             cursor.execute("""
-                INSERT INTO meals (user_id, date, foods, calories, meal_type, portion_size)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (user_id, date, foods_json, calories, meal_type, portion_size))
+                INSERT INTO meals (user_id, date, foods, calories, meal_type, meal_type_custom, portion_size)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (user_id, date, foods_json, calories, meal_type, meal_type_custom, portion_size))
             
             # 獲取新記錄的 ID
             record_id = cursor.lastrowid
@@ -386,7 +367,8 @@ def store_meal(user_id: str,
             conn.commit()
             
             logger.info(f"已儲存飲食記錄: user_id={user_id}, meal_type={meal_type}, "
-                       f"calories={calories} kcal, portion={portion_size}g, record_id={record_id}")
+                       f"custom={meal_type_custom}, calories={calories} kcal, "
+                       f"portion={portion_size}g, record_id={record_id}")
             logger.debug(f"食物清單: {foods}")
             
             return record_id
@@ -398,7 +380,7 @@ def store_meal(user_id: str,
 
 
 def get_history(user_id: str, 
-                days: int = DEFAULT_HISTORY_DAYS) -> List[Tuple[int, str, Dict[str, float], float, str]]:
+                days: int = DEFAULT_HISTORY_DAYS) -> List[Tuple[int, str, Dict[str, float], float, str, str, str]]:
     """
     獲取用戶的飲食歷史記錄
     
@@ -413,6 +395,8 @@ def get_history(user_id: str,
             - foods (Dict[str, float]): 食物字典
             - calories (float): 總熱量
             - created_at (str): 創建時間
+            - meal_type (str): 餐次類型
+            - meal_type_custom (str): 自定義餐次名稱（可能為 None）
     
     Raises:
         sqlite3.Error: 資料庫查詢失敗
@@ -421,31 +405,10 @@ def get_history(user_id: str,
     使用範例:
         # 獲取最近 7 天的記錄
         history = get_history('user_123')
-        for record_id, date, foods, calories, created_at in history:
-            print(f"{date}: {calories} kcal")
+        for record_id, date, foods, calories, created_at, meal_type, meal_custom in history:
+            print(f"{date} - {meal_type}: {calories} kcal")
             for food, cal in foods.items():
                 print(f"  - {food}: {cal} kcal")
-        
-        # 獲取最近 30 天的記錄
-        history = get_history('user_123', days=30)
-    
-    未來擴展（MongoDB）:
-        def get_history_mongo(user_id: str, days: int = 7) -> List[Dict]:
-            '''從 MongoDB 查詢歷史'''
-            with get_mongo_connection() as db:
-                meals_collection = db['meals']
-                
-                # 計算日期範圍
-                start_date = datetime.now() - timedelta(days=days)
-                
-                # 查詢文檔
-                cursor = meals_collection.find({
-                    'user_id': user_id,
-                    'date': {'$gte': start_date.isoformat()}
-                }).sort('date', -1)  # 按日期降序排列
-                
-                # 轉換為列表
-                return list(cursor)
     """
     # 參數驗證
     if not user_id:
@@ -461,9 +424,9 @@ def get_history(user_id: str,
             # 計算起始日期
             start_date = (datetime.now() - timedelta(days=days)).isoformat()
             
-            # 查詢記錄
+            # 查詢記錄（包含餐次類型）
             cursor.execute("""
-                SELECT id, date, foods, calories, created_at
+                SELECT id, date, foods, calories, created_at, meal_type, meal_type_custom
                 FROM meals
                 WHERE user_id = ? AND date >= ?
                 ORDER BY date DESC
@@ -480,6 +443,8 @@ def get_history(user_id: str,
                 foods_json = row['foods']
                 calories = row['calories']
                 created_at = row['created_at']
+                meal_type = row['meal_type'] if 'meal_type' in row.keys() else 'meal'
+                meal_type_custom = row['meal_type_custom'] if 'meal_type_custom' in row.keys() else None
                 
                 # 解析 JSON
                 try:
@@ -488,7 +453,7 @@ def get_history(user_id: str,
                     logger.warning(f"記錄 {record_id} 的 foods JSON 解析失敗: {e}")
                     foods = {}
                 
-                results.append((record_id, date, foods, calories, created_at))
+                results.append((record_id, date, foods, calories, created_at, meal_type, meal_type_custom))
             
             logger.info(f"查詢歷史記錄: user_id={user_id}, days={days}, count={len(results)}")
             
@@ -654,7 +619,7 @@ def get_previous_meals(user_id: str, current_meal_type: str) -> List[Tuple[int, 
     if not user_id:
         raise ValueError("user_id 不能為空")
     
-    valid_meal_types = {'breakfast', 'lunch', 'dinner', 'snack'}
+    valid_meal_types = {'breakfast', 'lunch', 'dinner', 'snack', 'latenight', 'other'}
     if current_meal_type not in valid_meal_types:
         raise ValueError(f"current_meal_type 必須是 {valid_meal_types} 之一")
     

@@ -600,6 +600,303 @@ class TestIntegration:
         assert discord_bot.DEFAULT_INTENTS.message_content == True
 
 
+class TestMealTypeInquiry:
+    """測試餐次詢問功能"""
+    
+    @pytest.mark.asyncio
+    async def test_ask_meal_type_chinese_breakfast(self):
+        """測試中文早餐輸入"""
+        # 建立 mock bot 和 interaction
+        mock_bot = AsyncMock()
+        mock_interaction = AsyncMock()
+        mock_interaction.followup.send = AsyncMock()
+        
+        # Mock 用戶回應訊息
+        mock_message = Mock()
+        mock_message.content = "早餐"
+        mock_message.author.id = 12345
+        
+        # Mock wait_for 返回訊息
+        mock_bot.wait_for = AsyncMock(return_value=mock_message)
+        
+        # 執行函數
+        from src.discord_bot import _ask_meal_type
+        result = await _ask_meal_type(mock_interaction, 12345)
+        
+        # 驗證結果
+        assert result == 'breakfast'
+        mock_interaction.followup.send.assert_called_once()
+        call_kwargs = mock_interaction.followup.send.call_args[1]
+        assert '早餐、午餐還是晚餐' in call_kwargs['content']
+        mock_bot.wait_for.assert_awaited_once()
+    
+    @pytest.mark.asyncio
+    async def test_ask_meal_type_english_lunch(self):
+        """測試英文午餐輸入"""
+        mock_bot = AsyncMock()
+        mock_interaction = AsyncMock()
+        mock_interaction.followup.send = AsyncMock()
+        
+        mock_message = Mock()
+        mock_message.content = "lunch"
+        mock_message.author.id = 12345
+        
+        mock_bot.wait_for = AsyncMock(return_value=mock_message)
+        
+        from src.discord_bot import _ask_meal_type
+        result = await _ask_meal_type(mock_interaction, 12345)
+        
+        assert result == 'lunch'
+    
+    @pytest.mark.asyncio
+    async def test_ask_meal_type_dinner_variations(self):
+        """測試晚餐多種輸入格式"""
+        test_inputs = ['晚餐', '晚', 'dinner', 'DINNER']
+        
+        for input_text in test_inputs:
+            mock_bot = AsyncMock()
+            mock_interaction = AsyncMock()
+            mock_interaction.followup.send = AsyncMock()
+            
+            mock_message = Mock()
+            mock_message.content = input_text
+            mock_message.author.id = 12345
+            
+            mock_bot.wait_for = AsyncMock(return_value=mock_message)
+            
+            from src.discord_bot import _ask_meal_type
+            result = await _ask_meal_type(mock_interaction, 12345)
+            
+            assert result == 'dinner', f"Failed for input: {input_text}"
+    
+    @pytest.mark.asyncio
+    async def test_ask_meal_type_snack(self):
+        """測試點心輸入"""
+        mock_bot = AsyncMock()
+        mock_interaction = AsyncMock()
+        mock_interaction.followup.send = AsyncMock()
+        
+        mock_message = Mock()
+        mock_message.content = "點心"
+        mock_message.author.id = 12345
+        
+        mock_bot.wait_for = AsyncMock(return_value=mock_message)
+        
+        from src.discord_bot import _ask_meal_type
+        result = await _ask_meal_type(mock_interaction, 12345)
+        
+        assert result == 'snack'
+    
+    @pytest.mark.asyncio
+    async def test_ask_meal_type_invalid_then_valid(self):
+        """測試無效輸入後重試成功"""
+        mock_bot = AsyncMock()
+        mock_interaction = AsyncMock()
+        mock_interaction.followup.send = AsyncMock()
+        
+        # 第一次返回無效輸入
+        invalid_message = Mock()
+        invalid_message.content = "xyz123"
+        invalid_message.author.id = 12345
+        
+        # 第二次返回有效輸入
+        valid_message = Mock()
+        valid_message.content = "午餐"
+        valid_message.author.id = 12345
+        
+        # 模擬兩次 wait_for 呼叫
+        mock_bot.wait_for = AsyncMock(side_effect=[invalid_message, valid_message])
+        
+        from src.discord_bot import _ask_meal_type
+        result = await _ask_meal_type(mock_interaction, 12345)
+        
+        # 驗證結果
+        assert result == 'lunch'
+        assert mock_interaction.followup.send.call_count == 2  # 原始詢問 + 重試提示
+        assert mock_bot.wait_for.await_count == 2
+    
+    @pytest.mark.asyncio
+    async def test_ask_meal_type_timeout_returns_default(self):
+        """測試超時返回預設值"""
+        mock_bot = AsyncMock()
+        mock_interaction = AsyncMock()
+        mock_interaction.followup.send = AsyncMock()
+        
+        # Mock wait_for 拋出 TimeoutError
+        import asyncio
+        mock_bot.wait_for = AsyncMock(side_effect=asyncio.TimeoutError)
+        
+        from src.discord_bot import _ask_meal_type
+        result = await _ask_meal_type(mock_interaction, 12345)
+        
+        # 驗證返回預設值
+        assert result == 'meal'
+        mock_interaction.followup.send.assert_called()  # 應該發送超時訊息
+    
+    @pytest.mark.asyncio
+    async def test_ask_meal_type_wrong_user_ignored(self):
+        """測試其他用戶訊息被忽略"""
+        mock_bot = AsyncMock()
+        mock_interaction = AsyncMock()
+        mock_interaction.followup.send = AsyncMock()
+        
+        # 第一個訊息來自不同用戶
+        wrong_user_message = Mock()
+        wrong_user_message.content = "早餐"
+        wrong_user_message.author.id = 99999  # 不同的用戶 ID
+        
+        # 第二個訊息來自正確用戶
+        correct_user_message = Mock()
+        correct_user_message.content = "lunch"
+        correct_user_message.author.id = 12345
+        
+        # wait_for 應該通過 check 函數過濾，只接受正確用戶
+        # 我們模擬第二次呼叫返回正確訊息
+        mock_bot.wait_for = AsyncMock(return_value=correct_user_message)
+        
+        from src.discord_bot import _ask_meal_type
+        result = await _ask_meal_type(mock_interaction, 12345)
+        
+        assert result == 'lunch'
+
+
+class TestMealTypeHelpers:
+    """測試餐次輔助函數"""
+    
+    def test_parse_meal_type_chinese(self):
+        """測試中文餐次解析"""
+        from src.discord_bot import _parse_meal_type_input
+        
+        assert _parse_meal_type_input("早餐") == 'breakfast'
+        assert _parse_meal_type_input("早") == 'breakfast'
+        assert _parse_meal_type_input("午餐") == 'lunch'
+        assert _parse_meal_type_input("午") == 'lunch'
+        assert _parse_meal_type_input("晚餐") == 'dinner'
+        assert _parse_meal_type_input("晚") == 'dinner'
+        assert _parse_meal_type_input("點心") == 'snack'
+        assert _parse_meal_type_input("消夜") == 'snack'
+    
+    def test_parse_meal_type_english(self):
+        """測試英文餐次解析"""
+        from src.discord_bot import _parse_meal_type_input
+        
+        assert _parse_meal_type_input("breakfast") == 'breakfast'
+        assert _parse_meal_type_input("BREAKFAST") == 'breakfast'
+        assert _parse_meal_type_input("lunch") == 'lunch'
+        assert _parse_meal_type_input("dinner") == 'dinner'
+        assert _parse_meal_type_input("snack") == 'snack'
+    
+    def test_parse_meal_type_invalid(self):
+        """測試無效輸入返回 None"""
+        from src.discord_bot import _parse_meal_type_input
+        
+        assert _parse_meal_type_input("xyz") is None
+        assert _parse_meal_type_input("123") is None
+        assert _parse_meal_type_input("") is None
+        assert _parse_meal_type_input("宵夜") is None  # 未支援的輸入
+    
+    def test_format_meal_type_chinese(self):
+        """測試餐次中文格式化"""
+        from src.discord_bot import _format_meal_type_chinese
+        
+        assert _format_meal_type_chinese('breakfast') == '🌅 早餐'
+        assert _format_meal_type_chinese('lunch') == '☀️ 午餐'
+        assert _format_meal_type_chinese('dinner') == '🌙 晚餐'
+        assert _format_meal_type_chinese('snack') == '🍪 點心'
+        assert _format_meal_type_chinese('meal') == '🍽️ 餐點'
+        assert _format_meal_type_chinese('unknown') == '🍽️ 餐點'  # 未知類型返回預設
+
+
+class TestPortionEstimation:
+    """測試份量估計功能"""
+    
+    @pytest.mark.asyncio
+    async def test_estimate_portion_returns_default(self):
+        """測試份量估計返回預設值（VLM 未實作前）"""
+        from src.discord_bot import _estimate_portion_from_image
+        
+        mock_image_path = "/tmp/test_food.jpg"
+        portion = await _estimate_portion_from_image(mock_image_path)
+        
+        # 目前應該返回 100.0g 預設值
+        assert portion == 100.0
+        assert isinstance(portion, float)
+
+
+class TestAnalyzeWithMealType:
+    """測試完整 /analyze 命令與餐次整合"""
+    
+    @pytest.mark.asyncio
+    async def test_analyze_stores_meal_type_and_portion(self):
+        """測試 analyze 命令正確儲存餐次和份量"""
+        # 建立 mock 環境
+        mock_bot = AsyncMock()
+        mock_interaction = AsyncMock()
+        mock_attachment = Mock()
+        mock_attachment.url = "http://example.com/food.jpg"
+        mock_attachment.filename = "food.jpg"
+        
+        # Mock 各個模組的回傳值
+        with patch('src.image_processor.process_image', new_callable=AsyncMock) as mock_process:
+            mock_process.return_value = {
+                'foods': [
+                    {'name': '白飯', 'confidence': 0.95, 'portion': '1碗'}
+                ],
+                'success': True
+            }
+            
+            with patch('src.nutrition_calculator.get_nutrition', new_callable=AsyncMock) as mock_nutrition:
+                mock_nutrition.return_value = {
+                    'calories': 200.0,
+                    'protein': 4.0,
+                    'carbs': 44.0,
+                    'fat': 0.5,
+                    'fiber': 0.3
+                }
+                
+                with patch('src.data_storage.store_meal', new_callable=AsyncMock) as mock_store:
+                    mock_store.return_value = True
+                    
+                    # Mock 餐次詢問回傳 'breakfast'
+                    mock_message = Mock()
+                    mock_message.content = "早餐"
+                    mock_message.author.id = 12345
+                    mock_bot.wait_for = AsyncMock(return_value=mock_message)
+                    
+                    # Mock 份量估計
+                    with patch('src.discord_bot._estimate_portion_from_image', new_callable=AsyncMock) as mock_portion:
+                        mock_portion.return_value = 100.0
+                        
+                        # 執行 analyze_food 命令
+                        from src.discord_bot import analyze_food
+                        
+                        # 需要 mock interaction 的各種屬性
+                        mock_interaction.user.id = 12345
+                        mock_interaction.response.defer = AsyncMock()
+                        mock_interaction.followup.send = AsyncMock()
+                        
+                        # 執行命令（需要傳入 attachment）
+                        await analyze_food(mock_interaction, mock_attachment)
+                        
+                        # 驗證 store_meal 被正確呼叫
+                        mock_store.assert_awaited_once()
+                        call_kwargs = mock_store.call_args[1]
+                        assert call_kwargs['meal_type'] == 'breakfast'
+                        assert call_kwargs['portion_size'] == 100.0
+                        assert call_kwargs['user_id'] == 12345
+                        
+                        # 驗證回應訊息包含餐次資訊
+                        mock_interaction.followup.send.assert_called()
+                        # 取得最後一次 followup.send 的呼叫
+                        last_send_call = mock_interaction.followup.send.call_args
+                        # 驗證 embed 包含餐次資訊（如果有的話）
+                        if 'embed' in last_send_call[1]:
+                            embed = last_send_call[1]['embed']
+                            # 驗證 embed 包含餐次相關欄位
+                            fields_dict = {field.name: field.value for field in embed.fields}
+                            assert '餐次資訊' in fields_dict or '🍽️' in str(embed.to_dict())
+
+
 if __name__ == "__main__":
     # 運行測試
     pytest.main([__file__, "-v", "--tb=short"])

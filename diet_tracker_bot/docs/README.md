@@ -1855,60 +1855,205 @@ class DietTrackerBot(commands.Bot):
         )
 ```
 
-#### 2. /track 命令實現
+#### 2. /analyze 命令實現 (新增餐次詢問功能)
 
 ```python
-@bot.command(name='track')
-async def track_food(ctx: commands.Context):
-    """MVP 核心功能 - 食物圖片追蹤"""
+@bot.tree.command(name='analyze', description='分析食物圖片並追蹤營養')
+async def analyze_food(interaction: discord.Interaction, attachment: discord.Attachment):
+    """MVP 核心功能 - 食物圖片追蹤 + 餐次詢問"""
 
     # 1. 驗證附件
-    if not ctx.message.attachments:
-        await ctx.send("📷 請上傳食物圖片來開始分析！")
+    if not attachment.content_type or not attachment.content_type.startswith('image/'):
+        await interaction.response.send_message("❌ 請上傳有效的圖片檔案")
         return
 
-    # 2. 檔案驗證
-    attachment = ctx.message.attachments[0]
-    if not _is_valid_image_file(attachment.filename):
-        await ctx.send("❌ 請上傳有效的圖片檔案 (jpg, png, etc.)")
-        return
-
-    # 3. 進度追蹤
-    processing_msg = await ctx.send("🔄 正在分析您的食物圖片...")
+    # 2. 初始回應
+    await interaction.response.defer(thinking=True)
+    user_id = str(interaction.user.id)
 
     try:
-        # 4. 完整 Pipeline 執行
-        user_id = str(ctx.author.id)
-
         # 步驟 1: 食物識別
-        await processing_msg.edit(content="🔄 步驟 1/4: 識別食物中...")
+        await interaction.followup.send("🔄 步驟 1/6: 下載並分析圖片...")
         foods = image_processor.process_image(temp_path)
 
-        # 步驟 2: 營養分析
-        await processing_msg.edit(content="🔄 步驟 2/4: 計算營養成分...")
+        # 🆕 步驟 2: 餐次詢問 (互動式)
+        await interaction.followup.send("🔄 步驟 2/6: 詢問餐次資訊...")
+        meal_type = await _ask_meal_type(interaction, user_id)
+
+        # 🆕 步驟 3: 份量估計 (VLM 未來功能)
+        await interaction.followup.send("🔄 步驟 3/6: 估計食物份量...")
+        portion_size = await _estimate_portion_from_image(temp_path)
+
+        # 步驟 4: 營養分析 (調整份量)
+        await interaction.followup.send("🔄 步驟 4/6: 計算營養成分...")
         nutrition_data = nutrition_calculator.get_nutrition(foods)
 
-        # 步驟 3: 儲存記錄
-        await processing_msg.edit(content="🔄 步驟 3/4: 儲存飲食記錄...")
-        meal_id = data_storage.store_meal(user_id, food_dict, total_calories)
+        # 根據份量調整營養值
+        portion_factor = portion_size / 100.0
+        adjusted_nutrition = {}
+        for food, data in nutrition_data.items():
+            adjusted_nutrition[food] = {
+                k: v * portion_factor for k, v in data.items()
+            }
 
-        # 步驟 4: AI 推薦
-        await processing_msg.edit(content="🔄 步驟 4/4: 生成個人化建議...")
+        # 步驟 5: 儲存記錄 (包含餐次和份量)
+        await interaction.followup.send("🔄 步驟 5/6: 儲存飲食記錄...")
+        meal_id = data_storage.store_meal(
+            user_id,
+            food_dict,
+            total_calories * portion_factor,
+            meal_type=meal_type,
+            portion_size=portion_size
+        )
+
+        # 步驟 6: AI 推薦
+        await interaction.followup.send("🔄 步驟 6/6: 生成個人化建議...")
         recommendation = recommendation_engine.get_recommendation(user_id)
 
-        # 5. 格式化並發送結果
-        response = _format_track_response(foods, nutrition_data, total_calories, recommendation, meal_id)
-        await processing_msg.edit(content=response)
+        # 格式化並發送結果
+        response = _format_track_response(
+            foods, adjusted_nutrition, total_calories * portion_factor,
+            recommendation, meal_id, meal_type, portion_size
+        )
+        await interaction.followup.send(embed=response)
 
     except Exception as e:
-        await processing_msg.edit(content="❌ 處理過程中發生錯誤，請稍後再試。")
+        await interaction.followup.send("❌ 處理過程中發生錯誤，請稍後再試。")
+
+
+async def _ask_meal_type(interaction: discord.Interaction, user_id: str) -> str:
+    """
+    互動式餐次詢問功能
+
+    支援輸入格式:
+    - 中文: 早餐、早、午餐、午、晚餐、晚、點心、消夜
+    - 英文: breakfast, lunch, dinner, snack
+
+    錯誤處理:
+    - 無效輸入: 重新詢問 (最多1次重試)
+    - 超時 (30秒): 返回預設值 'meal'
+    - 其他用戶訊息: 自動過濾
+
+    未來擴展:
+    - 根據 datetime.now().hour 自動推斷餐次
+    - 支援更多語言 (日文、韓文等)
+    """
+
+    # 發送詢問訊息
+    await interaction.followup.send(
+        "🍽️ 這是什麼餐次？\n"
+        "請回覆: **早餐**、**午餐**、**晚餐**、**點心** (或英文 breakfast/lunch/dinner/snack)\n"
+        "⏰ 30秒內未回應將使用預設值"
+    )
+
+    def check(m):
+        return m.author.id == int(user_id) and m.channel == interaction.channel
+
+    try:
+        # 等待用戶回應
+        message = await bot.wait_for('message', timeout=30.0, check=check)
+        parsed_type = _parse_meal_type_input(message.content)
+
+        if parsed_type:
+            return parsed_type
+        else:
+            # 無效輸入，重試一次
+            await interaction.followup.send(
+                "⚠️ 無法識別您的輸入，請重新輸入餐次類型 (早餐/午餐/晚餐/點心)"
+            )
+            retry_message = await bot.wait_for('message', timeout=20.0, check=check)
+            retry_parsed = _parse_meal_type_input(retry_message.content)
+            return retry_parsed if retry_parsed else 'meal'
+
+    except asyncio.TimeoutError:
+        await interaction.followup.send("⏰ 超時未回應，使用預設值: 一般餐點")
+        return 'meal'
+
+
+def _parse_meal_type_input(text: str) -> str:
+    """
+    解析用戶輸入的餐次類型
+
+    支援格式:
+    - 中文關鍵字: 早/午/晚/點/消
+    - 英文完整詞: breakfast/lunch/dinner/snack
+
+    返回標準化餐次類型或 None (無效輸入)
+    """
+    text_lower = text.strip().lower()
+
+    # 中文關鍵字映射
+    if '早' in text_lower:
+        return 'breakfast'
+    elif '午' in text_lower:
+        return 'lunch'
+    elif '晚' in text_lower:
+        return 'dinner'
+    elif '點' in text_lower or '消' in text_lower:
+        return 'snack'
+
+    # 英文關鍵字映射
+    elif 'breakfast' in text_lower:
+        return 'breakfast'
+    elif 'lunch' in text_lower:
+        return 'lunch'
+    elif 'dinner' in text_lower:
+        return 'dinner'
+    elif 'snack' in text_lower:
+        return 'snack'
+
+    return None
+
+
+def _format_meal_type_chinese(meal_type: str) -> str:
+    """格式化餐次類型為中文顯示 (含 emoji)"""
+    meal_type_map = {
+        'breakfast': '🌅 早餐',
+        'lunch': '☀️ 午餐',
+        'dinner': '🌙 晚餐',
+        'snack': '🍪 點心',
+        'meal': '🍽️ 餐點'
+    }
+    return meal_type_map.get(meal_type, '🍽️ 餐點')
+
+
+async def _estimate_portion_from_image(image_path: str) -> float:
+    """
+    使用 VLM (Vision Language Model) 估計食物份量
+
+    當前實現 (MVP):
+    - 返回預設值 100.0g
+
+    未來擴展計畫:
+    1. 整合 GPT-4 Vision API
+       - 輸入: 食物圖片 + 參考物 (硬幣、餐具)
+       - 輸出: 估計重量 (克)
+
+    2. 專門訓練的份量估計模型
+       - 基於深度學習的容量估算
+       - 使用 COCO 資料集微調
+
+    3. 用戶輔助輸入
+       - 提示用戶輸入份量描述 ("1碗", "半盤")
+       - 使用標準份量對照表轉換
+
+    範例 (未來):
+        portion = await estimate_portion_vlm(
+            image_path,
+            food_name="rice",
+            reference_object="spoon"
+        )
+        # 返回: 150.0 (克)
+    """
+    # TODO: 整合 VLM API
+    return 100.0  # 預設 100g
 ```
 
-#### 3. 回應格式化
+#### 3. 回應格式化 (包含餐次和份量資訊)
 
 ```python
-def _format_track_response(foods, nutrition_data, total_calories, recommendation, meal_id):
-    """格式化追蹤結果為用戶友好的訊息"""
+def _format_track_response(foods, nutrition_data, total_calories, recommendation, meal_id, meal_type='meal', portion_size=100.0):
+    """格式化追蹤結果為用戶友好的訊息 (包含餐次和份量)"""
 
     food_list = "、".join(foods) if foods else "未識別"
 
@@ -1928,11 +2073,16 @@ def _format_track_response(foods, nutrition_data, total_calories, recommendation
     # AI 推薦摘要
     recommendation_summary = _extract_recommendation_summary(recommendation)
 
+    # 🆕 格式化餐次資訊
+    meal_type_display = _format_meal_type_chinese(meal_type)
+
     return f"""✅ **飲食分析完成！**
+
+🍽️ **餐次資訊**: {meal_type_display} | ⚖️ 份量: {portion_size:.0f}g
 
 🔍 **識別結果**: {food_list}
 
-📊 **營養分析**:
+📊 **營養分析** (已根據份量調整):
 {chr(10).join(nutrition_details)}
 
 🔥 **總熱量**: {total_calories:.0f} kcal
@@ -1941,6 +2091,33 @@ def _format_track_response(foods, nutrition_data, total_calories, recommendation
 {recommendation_summary}
 
 📝 **記錄 ID**: #{meal_id} | 使用 `/history` 查看完整記錄"""
+
+
+# 餐次詢問使用範例
+"""
+用戶互動流程:
+
+1. 用戶: /analyze [上傳圖片]
+2. Bot: 🔄 步驟 1/6: 下載並分析圖片...
+3. Bot: 🍽️ 這是什麼餐次？請回覆: 早餐、午餐、晚餐、點心
+4. 用戶: 早餐  (或 breakfast)
+5. Bot: ✅ 已記錄為 🌅 早餐
+6. Bot: 🔄 步驟 3/6: 估計食物份量... (預設 100g)
+7. Bot: 🔄 步驟 4/6: 計算營養成分...
+8. Bot: 🔄 步驟 5/6: 儲存飲食記錄...
+9. Bot: 🔄 步驟 6/6: 生成個人化建議...
+10. Bot: ✅ 飲食分析完成！[詳細結果含餐次和份量]
+
+支援的輸入格式:
+✅ 中文: 早餐、早、午餐、午、晚餐、晚、點心、消夜
+✅ 英文: breakfast, lunch, dinner, snack
+✅ 大小寫不敏感
+
+錯誤處理:
+⚠️ 無效輸入 → 重新詢問 (1次重試機會)
+⏰ 超時30秒 → 使用預設值 'meal'
+🔒 其他用戶訊息 → 自動過濾忽略
+"""
 ```
 
 ### Discord Bot 設定指南

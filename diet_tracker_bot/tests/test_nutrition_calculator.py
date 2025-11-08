@@ -46,44 +46,42 @@ class TestNutritionCalculator:
     
     @pytest.fixture
     def sample_tfnd_data(self):
-        """建立測試用的TFND資料"""
+        """建立測試用的TFND資料（2024版中文格式）"""
         return [
+            # 第一行是header
             {
-                "name_zh": "鯖魚(炒)",
-                "name_en": "Mackerel",
-                "category": "魚貝類",
-                "nutrients_per_100g": {
-                    "熱量": {"value": 410.0, "unit": "kcal"},
-                    "粗蛋白": {"value": 16.7, "unit": "g"},
-                    "粗脂肪": {"value": 37.6, "unit": "g"}
-                }
+                "樣品名稱": "樣品名稱",
+                "俗名": "俗名",
+                "修正熱量(kcal)": "修正熱量(kcal)",
+                "粗蛋白(g)": "粗蛋白(g)",
+                "粗脂肪(g)": "粗脂肪(g)"
+            },
+            # 實際資料
+            {
+                "樣品名稱": "鯖魚(炒)",
+                "俗名": "炒鯖魚,mackerel",
+                "修正熱量(kcal)": "410.0",
+                "粗蛋白(g)": "16.7",
+                "粗脂肪(g)": "37.6"
             },
             {
-                "name_zh": "蘋果",
-                "name_en": "Apple",
-                "category": "水果類",
-                "nutrients_per_100g": {
-                    "熱量": {"value": 52.0, "unit": "kcal"},
-                    "粗蛋白": {"value": 0.3, "unit": "g"}
-                }
+                "樣品名稱": "蘋果",
+                "俗名": "apple,青蘋果,紅蘋果",
+                "熱量(kcal)": "52.0",
+                "粗蛋白(g)": "0.3"
             },
             {
-                "name_zh": "白米飯",
-                "name_en": "Rice",
-                "category": "穀物類",
-                "nutrients_per_100g": {
-                    "修正熱量": {"value": 183.0, "unit": "kcal"},
-                    "粗蛋白": {"value": 3.1, "unit": "g"}
-                }
+                "樣品名稱": "白米飯",
+                "俗名": "rice,米飯",
+                "修正熱量(kcal)": "183.0",
+                "粗蛋白(g)": "3.1"
             }
         ]
     
     @pytest.fixture
     def mock_tfnd_file(self, sample_tfnd_data):
-        """建立mock的TFND JSONL檔案內容"""
-        lines = [json.dumps(item, ensure_ascii=False) + '\n' 
-                for item in sample_tfnd_data]
-        return ''.join(lines)
+        """建立mock的TFND JSON檔案內容（2024版格式）"""
+        return json.dumps(sample_tfnd_data, ensure_ascii=False)
     
     @pytest.fixture
     def calculator_with_mock_data(self, mock_tfnd_file):
@@ -101,14 +99,16 @@ class TestNutritionCalculator:
             assert calculator.usda_api_key is not None or calculator.usda_api_key is None
     
     def test_load_tfnd_database_success(self, mock_tfnd_file):
-        """測試成功載入TFND資料庫"""
+        """測試成功載入TFND資料庫（2024版）"""
         with patch('builtins.open', mock_open(read_data=mock_tfnd_file)):
             with patch('pathlib.Path.exists', return_value=True):
                 calculator = NutritionCalculator()
                 
+                # 應該跳過header row，只有3筆實際資料
                 assert len(calculator.tfnd_data) == 3
-                assert calculator.tfnd_data[0]['name_en'] == 'Mackerel'
-                assert calculator.tfnd_data[1]['name_en'] == 'Apple'
+                assert calculator.tfnd_data[0]['樣品名稱'] == '鯖魚(炒)'
+                assert calculator.tfnd_data[1]['樣品名稱'] == '蘋果'
+                assert calculator.tfnd_data[2]['樣品名稱'] == '白米飯'
     
     def test_load_tfnd_database_file_not_exists(self):
         """測試TFND檔案不存在的情況"""
@@ -136,56 +136,65 @@ class TestNutritionCalculator:
         assert calculator._clean_food_name("Fresh Apple") == "apple"
     
     def test_extract_calories_standard_format(self, calculator_with_mock_data):
-        """測試提取標準格式的熱量"""
+        """測試提取標準格式的熱量（2024版）"""
         calculator = calculator_with_mock_data
         
         food_item = {
-            "nutrients_per_100g": {
-                "熱量": {"value": 100.0, "unit": "kcal"}
-            }
+            "熱量(kcal)": "100.0"
         }
         
         calories = calculator._extract_calories(food_item)
         assert calories == 100.0
     
     def test_extract_calories_alternative_key(self, calculator_with_mock_data):
-        """測試提取使用替代欄位名稱的熱量"""
+        """測試提取使用替代欄位名稱的熱量（2024版）"""
         calculator = calculator_with_mock_data
         
         food_item = {
-            "nutrients_per_100g": {
-                "修正熱量": {"value": 183.0, "unit": "kcal"}
-            }
+            "修正熱量(kcal)": "183.0"
         }
         
         calories = calculator._extract_calories(food_item)
         assert calories == 183.0
     
-    def test_extract_calories_not_found(self, calculator_with_mock_data):
-        """測試未找到熱量資訊的情況"""
+    def test_extract_calories_numeric_value(self, calculator_with_mock_data):
+        """測試數值型態的熱量"""
         calculator = calculator_with_mock_data
         
         food_item = {
-            "nutrients_per_100g": {
-                "蛋白質": {"value": 10.0, "unit": "g"}
-            }
+            "熱量(kcal)": 95.5
+        }
+        
+        calories = calculator._extract_calories(food_item)
+        assert calories == 95.5
+    
+    def test_extract_calories_not_found(self, calculator_with_mock_data):
+        """測試未找到熱量資訊的情況（2024版）"""
+        calculator = calculator_with_mock_data
+        
+        food_item = {
+            "粗蛋白(g)": "10.0"
         }
         
         calories = calculator._extract_calories(food_item)
         assert calories == 0
     
     def test_query_tfnd_exact_match(self, calculator_with_mock_data):
-        """測試TFND資料庫精確匹配"""
+        """測試TFND資料庫精確匹配（2024版中文）"""
         calculator = calculator_with_mock_data
         
-        # 測試不區分大小寫的精確匹配
+        # 測試中文樣品名稱精確匹配
+        calories = calculator._query_tfnd_database("鯖魚(炒)")
+        assert calories == 410.0
+        
+        # 測試俗名匹配
         calories = calculator._query_tfnd_database("mackerel")
         assert calories == 410.0
         
         calories = calculator._query_tfnd_database("apple")
         assert calories == 52.0
         
-        calories = calculator._query_tfnd_database("rice")
+        calories = calculator._query_tfnd_database("米飯")
         assert calories == 183.0
     
     def test_query_tfnd_fuzzy_match(self, calculator_with_mock_data):
