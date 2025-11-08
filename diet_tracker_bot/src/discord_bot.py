@@ -7,8 +7,9 @@ Diet Tracker Discord Bot - Discord 機器人模組
 提供用戶友好的界面來追蹤飲食、查看歷史和獲得AI推薦。
 
 主要功能：
-1. /track 命令 - 食物圖片識別和營養分析 (MVP)
-2. 未來擴展：/history, /stats, /recommend 等命令
+1. /analyze 命令 - 食物圖片識別和營養分析 (MVP)
+2. /history 命令 - 查看飲食歷史記錄
+3. 未來擴展：/stats, /recommend 等命令
 
 設計原則：
 - 模組化設計，易於添加新命令
@@ -100,7 +101,7 @@ class DietTrackerBot(commands.Bot):
         await self.change_presence(
             activity=discord.Activity(
                 type=discord.ActivityType.watching,
-                name="你的飲食健康 | /track 開始追蹤"
+                name="你的飲食健康 | /analyze 開始分析"
             )
         )
     
@@ -132,10 +133,10 @@ class DietTrackerBot(commands.Bot):
 bot = DietTrackerBot()
 
 
-@bot.tree.command(name='track', description='上傳食物圖片進行營養分析和追蹤')
-async def track_food(interaction: discord.Interaction, 圖片: discord.Attachment):
+@bot.tree.command(name='analyze', description='上傳食物圖片進行營養分析和追蹤')
+async def analyze_food(interaction: discord.Interaction, 圖片: discord.Attachment):
     """
-    /track 斜槓命令 - MVP 核心功能
+    /analyze 斜槓命令 - MVP 核心功能
     
     處理用戶上傳的食物圖片，進行以下流程：
     1. 檢查附件 (圖片)
@@ -158,7 +159,7 @@ async def track_food(interaction: discord.Interaction, 圖片: discord.Attachmen
             await interaction.response.send_message(
                 "❌ **請提供食物圖片進行分析！**\n\n"
                 "使用方式：\n"
-                "1. 輸入 `/track`\n"
+                "1. 輸入 `/analyze`\n"
                 "2. 在 `圖片` 參數中上傳食物圖片\n"
                 "3. 等待 AI 分析結果\n\n"
                 "💡 支援 JPG, PNG 等常見格式",
@@ -282,20 +283,26 @@ async def help_command(interaction: discord.Interaction):
     )
     
     embed.add_field(
-        name="📷 /track",
+        name="📷 /analyze",
         value="上傳食物圖片進行分析\n• 自動識別食物\n• 計算營養成分\n• 儲存飲食記錄\n• 生成個人化建議",
         inline=False
     )
     
     embed.add_field(
-        name="❓ /help", 
-        value="顯示此說明訊息",
-        inline=True
+        name="📋 /history",
+        value="查看飲食歷史記錄\n• 顯示最近的用餐記錄\n• 營養攝取統計\n• 可指定查看天數（預設7天）",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="🤖 其他命令",
+        value="• `/ask` - 向 AI 營養師提問\n• `/hello` - 打招呼互動\n• `/help` - 顯示此說明",
+        inline=False
     )
     
     embed.add_field(
         name="🔜 即將推出",
-        value="• `/history` - 查看飲食歷史\n• `/stats` - 營養統計報告\n• `/recommend` - 獲得飲食建議",
+        value="• `/stats` - 詳細營養統計報告\n• `/recommend` - 個人化飲食建議\n• `/analyze3` - 三階段增強分析",
         inline=False
     )
     
@@ -473,49 +480,123 @@ async def _is_admin_or_owner_interaction(interaction: discord.Interaction) -> bo
 
 # ==================== 未來擴展命令架構 ====================
 
-@bot.tree.command(name='analyze', description='上傳食物圖片進行分析')
-async def analyze_food(interaction: discord.Interaction, 圖片: discord.Attachment):
-    """
-    /analyze 命令 - 與 /track 相同的功能，提供替代命令名稱
-    """
-    # 重定向到 track_food 函數
-    await track_food(interaction, 圖片)
+# 刪除重複的 analyze 命令，現在主要的 analyze 命令在上面
 
-@bot.tree.command(name='analyze3', description='三階段影像→料理風格→菜名→營養')
-async def analyze3_food(interaction: discord.Interaction, 圖片: discord.Attachment):
+
+@bot.tree.command(name='history', description='查看您的飲食歷史記錄')
+async def history_command(interaction: discord.Interaction, 天數: int = 7):
     """
-    /analyze3 命令 - 增強版三階段分析
+    /history 命令 - 查看用戶飲食歷史記錄
+    
+    Args:
+        interaction: Discord 斜槓命令互動
+        天數: 查看最近幾天的記錄，預設 7 天
     """
-    embed = discord.Embed(
-        title="🚧 三階段增強分析功能",
-        description="此功能正在開發中，即將提供更精確的分析！",
-        color=0xffa500
-    )
-    
-    embed.add_field(
-        name="🔍 第一階段 - 影像深度解析",
-        value="• 高精度物體識別\n• 食物邊界檢測\n• 材質紋理分析",
-        inline=False
-    )
-    
-    embed.add_field(
-        name="🍽️ 第二階段 - 料理風格識別", 
-        value="• 中式、西式、日式等料理風格\n• 烹飪方式判定\n• 地域特色識別",
-        inline=False
-    )
-    
-    embed.add_field(
-        name="📝 第三階段 - 精確菜名判定",
-        value="• 完整菜名推測\n• 食材成分分析\n• 詳細營養計算",
-        inline=False
-    )
-    
-    if 圖片:
-        embed.set_image(url=圖片.url)
-    
-    embed.set_footer(text="敬請期待這個強大的分析功能！")
-    
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    try:
+        user_id = str(interaction.user.id)
+        
+        # 參數驗證
+        if 天數 <= 0 or 天數 > 365:
+            await interaction.response.send_message(
+                "❌ **天數參數錯誤**\n\n天數必須在 1-365 之間",
+                ephemeral=True
+            )
+            return
+        
+        await interaction.response.send_message("🔍 **正在查詢您的飲食記錄...**")
+        
+        # 查詢歷史記錄
+        history_records = data_storage.get_history(user_id, 天數)
+        
+        if not history_records:
+            embed = discord.Embed(
+                title="📋 飲食歷史記錄",
+                description=f"最近 {天數} 天內沒有飲食記錄",
+                color=0xffa500
+            )
+            embed.add_field(
+                name="💡 開始記錄",
+                value="使用 `/analyze` 命令上傳食物圖片開始記錄您的飲食！",
+                inline=False
+            )
+            await interaction.edit_original_response(content=None, embed=embed)
+            return
+        
+        # 建立歷史記錄 Embed
+        embed = discord.Embed(
+            title="📋 您的飲食歷史記錄",
+            description=f"最近 {天數} 天的飲食記錄（共 {len(history_records)} 筆）",
+            color=0x3498db,
+            timestamp=datetime.now()
+        )
+        
+        # 計算總統計
+        total_meals = len(history_records)
+        total_calories = sum(record[3] for record in history_records)  # record[3] 是 calories
+        avg_calories = total_calories / total_meals if total_meals > 0 else 0
+        
+        # 統計摘要
+        embed.add_field(
+            name="📊 統計摘要",
+            value=f"• **總餐數**: {total_meals} 餐\n"
+                  f"• **總熱量**: {total_calories:.0f} kcal\n"
+                  f"• **平均熱量**: {avg_calories:.0f} kcal/餐",
+            inline=False
+        )
+        
+        # 顯示最近的記錄（最多5筆）
+        recent_records = history_records[:5]
+        
+        for i, (record_id, date, foods, calories, created_at) in enumerate(recent_records):
+            # 解析日期
+            try:
+                meal_date = datetime.fromisoformat(date.replace('Z', '+00:00'))
+                formatted_date = meal_date.strftime("%m月%d日 %H:%M")
+            except:
+                formatted_date = date[:16]  # 備用格式
+            
+            # 建構食物列表
+            if isinstance(foods, dict):
+                food_list = []
+                for food_name, food_calories in foods.items():
+                    food_list.append(f"• {food_name}: {food_calories:.0f} kcal")
+                foods_text = "\n".join(food_list) if food_list else "無詳細資訊"
+            else:
+                foods_text = "資料格式錯誤"
+            
+            embed.add_field(
+                name=f"🍽️ {formatted_date} (#{record_id})",
+                value=f"{foods_text}\n**總計**: {calories:.0f} kcal",
+                inline=False
+            )
+        
+        # 如果有更多記錄，顯示提示
+        if len(history_records) > 5:
+            embed.add_field(
+                name="📝 更多記錄",
+                value=f"還有 {len(history_records) - 5} 筆記錄，使用較小的天數參數查看更詳細的記錄",
+                inline=False
+            )
+        
+        embed.set_footer(text="💡 使用 /analyze 命令添加新的飲食記錄")
+        
+        await interaction.edit_original_response(content=None, embed=embed)
+        
+        logger.info(f"用戶 {user_id} 查詢了 {天數} 天的歷史記錄，共 {len(history_records)} 筆")
+        
+    except Exception as e:
+        logger.error(f"History命令錯誤 - 用戶: {interaction.user.id}, 錯誤: {str(e)}")
+        
+        try:
+            await interaction.edit_original_response(
+                content="❌ **查詢歷史記錄時發生錯誤**\n請稍後再試，或聯繫管理員。"
+            )
+        except:
+            try:
+                await interaction.followup.send("❌ 查詢歷史記錄時發生錯誤，請稍後再試。")
+            except:
+                pass
+
 
 @bot.tree.command(name='ask', description='向營養師提問')
 async def ask_nutritionist(interaction: discord.Interaction, 問題: str):
@@ -537,7 +618,7 @@ async def hello_command(interaction: discord.Interaction):
     
     embed.add_field(
         name="🚀 開始使用",
-        value="• `/track` - 上傳食物圖片開始分析\n• `/help` - 查看所有功能",
+        value="• `/analyze` - 上傳食物圖片開始分析\n• `/history` - 查看飲食記錄\n• `/help` - 查看所有功能",
         inline=False
     )
     

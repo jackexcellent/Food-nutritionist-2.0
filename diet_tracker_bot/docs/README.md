@@ -11,8 +11,11 @@
 - **🔍 食物識別**: 使用 Azure Computer Vision API 識別上傳的食物圖片
 - **📊 營養分析**: 結合 USDA API 和台灣衛福部資料計算營養成分
 - **💾 歷史記錄**: 儲存用戶的飲食歷史和偏好
+- **🚀 餐次分類**: 智慧分類餐點 (早餐/午餐/晚餐/點心) 與份量追蹤
+- **📈 趨勢分析**: 多日營養模式分析和前序餐點查詢
 - **🤖 AI 推薦**: 使用 Google Gemini LLM 生成個人化飲食建議 (階段 5)
 - **📱 Discord 整合**: 透過 Discord Bot 介面提供便利的用戶體驗
+- **🔮 RAG 準備**: 為未來語義搜尋和向量檢索奠定基礎
 
 ### 🏗️ 系統架構
 
@@ -345,7 +348,36 @@ python -m src.nutrition_calculator mackerel apple rice --debug
 3. 替換 `data/tfnd_clean.jsonl` 檔案
 4. 重新啟動應用程式
 
-## 🧪 測試
+## 🧪 測試與驗證
+
+### 統一測試執行器 (推薦)
+
+使用專案提供的測試執行腳本，支援不同測試類型和選項：
+
+```bash
+# 🎯 快速測試 (開發時使用)
+python run_tests.py --fast
+
+# 📋 運行所有測試並生成覆蓋率
+python run_tests.py --all --coverage --verbose
+
+# 🧪 只運行單元測試
+python run_tests.py --unit --verbose
+
+# 🔗 只運行整合測試
+python run_tests.py --integration --coverage
+
+# 🎯 只運行端到端測試
+python run_tests.py --e2e --verbose
+
+# ⚡ 只運行性能測試
+python run_tests.py --performance
+
+# 📊 查看所有可用選項
+python run_tests.py --help
+```
+
+### 直接使用 pytest
 
 ```bash
 # 執行所有測試
@@ -380,6 +412,101 @@ pytest tests/test_recommendation_engine.py -v
 
 # 🤖 執行 Discord Bot 測試 (階段6)
 pytest tests/test_discord_bot.py -v
+
+# 🎯 執行端到端整合測試 (完整 MVP 流程)
+pytest tests/test_end_to_end.py -v
+
+# ⚡ 執行性能和壓力測試
+pytest tests/test_performance.py -v
+```
+
+### 測試類型說明
+
+#### 🧪 單元測試 (Unit Tests)
+
+測試個別函數和類別的功能：
+
+- `test_utils.py` - 工具函數測試
+- `test_image_processor.py` - 圖像處理測試
+- `test_nutrition_calculator.py` - 營養計算測試
+- `test_data_storage.py` - 資料儲存測試
+- `test_recommendation_engine.py` - AI 推薦引擎測試
+
+#### 🔗 整合測試 (Integration Tests)
+
+測試模組間的交互作用：
+
+- `test_discord_bot.py` - Discord Bot 整合測試
+- `test_main.py` - 主程式整合測試
+
+#### 🎯 端到端測試 (E2E Tests)
+
+測試完整的用戶流程：
+
+- `test_end_to_end.py` - 完整 MVP 流程測試
+- 多用戶並發測試
+- 完整用戶旅程驗證
+- 系統資源使用測試
+
+#### ⚡ 性能測試 (Performance Tests)
+
+測試系統性能和擴展性：
+
+- `test_performance.py` - 性能基準測試
+- 壓力測試和負載測試
+- 記憶體洩漏檢測
+- 資料庫性能驗證
+
+### 測試標記 (Markers)
+
+使用 pytest 標記來選擇特定類型的測試：
+
+```bash
+# 只運行快速測試
+pytest -m "not slow"
+
+# 只運行需要外部 API 的測試
+pytest -m "external"
+
+# 只運行資料庫相關測試
+pytest -m "database"
+
+# 跳過性能測試
+pytest -m "not performance"
+
+# 只運行 Mock 測試
+pytest -m "mock"
+```
+
+### 覆蓋率報告
+
+```bash
+# 生成詳細覆蓋率報告
+python run_tests.py --all --coverage
+
+# 查看 HTML 覆蓋率報告
+# 報告將生成在 test_reports/ 目錄中
+```
+
+### 測試配置
+
+專案使用 `pytest.ini` 進行測試配置：
+
+- 自動發現測試檔案
+- 配置覆蓋率報告
+- 設定測試標記
+- 配置日誌輸出
+
+### 持續整合 (CI)
+
+測試腳本支援 CI/CD 環境：
+
+```bash
+# CI 環境中的自動化測試
+python run_tests.py --all --coverage --no-report
+
+# 檢查測試結果
+echo $?  # 0=成功, 1=失敗
 ```
 
 ### 🆕 圖像處理測試指南
@@ -1370,6 +1497,280 @@ pytest tests/test_recommendation_engine.py::TestPromptTemplates -v         # Pro
 - ✅ 參數驗證與邊界條件
 - ✅ 效能測試（大量歷史資料）
 - ✅ 完整工作流程整合測試
+
+---
+
+## 🚀 餐次分類與智慧分析功能 (已完成)
+
+**擴展資料庫架構，實現餐次類型分類、份量追蹤和時序分析功能。**
+
+### 核心功能特色
+
+#### 1. 🍽️ 餐次類型分類
+
+智慧分類使用者的餐點記錄，支援精確的營養追蹤和分析：
+
+- **`breakfast`** - 早餐
+- **`lunch`** - 午餐
+- **`dinner`** - 晚餐
+- **`snack`** - 點心/零食
+- **`meal`** - 一般餐點 (預設)
+
+#### 2. ⚖️ 份量大小追蹤
+
+精確記錄每餐的份量，提供更準確的營養計算：
+
+- 預設份量：100g
+- 支援自訂份量 (0.1g - 10000g)
+- 自動份量單位換算
+- 歷史份量趨勢分析
+
+#### 3. 🧠 前序餐點智慧查詢
+
+動態查詢當日已攝取的餐點，支援智慧營養規劃：
+
+```python
+# 晚餐前查看已吃的早餐和午餐
+previous_meals = get_previous_meals(user_id, "dinner")
+total_calories = sum(meal[3] for meal in previous_meals)
+remaining_target = 2000 - total_calories  # 計算剩餘熱量需求
+```
+
+#### 4. 📊 多日營養趨勢分析
+
+深度分析使用者的飲食模式和營養趨勢：
+
+```python
+# 分析過去 7 天的飲食模式
+analysis = get_past_days(user_id, days=7)
+print(f"平均每日熱量: {analysis['nutrition_trends']['avg_daily_calories']} kcal")
+print(f"餐次分布: {analysis['meal_type_stats']}")
+print(f"個性化建議: {analysis['recommendations']}")
+```
+
+### 資料庫架構升級
+
+#### 新增欄位
+
+```sql
+-- 餐次類型欄位 (向後相容遷移)
+ALTER TABLE meals ADD COLUMN meal_type TEXT DEFAULT 'meal';
+
+-- 份量大小欄位 (向後相容遷移)
+ALTER TABLE meals ADD COLUMN portion_size REAL DEFAULT 100.0;
+
+-- 新增索引優化查詢效能
+CREATE INDEX idx_meals_meal_type ON meals(meal_type);
+CREATE INDEX idx_meals_user_type_date ON meals(user_id, meal_type, date DESC);
+```
+
+#### 完整資料表結構
+
+```sql
+CREATE TABLE meals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    date TEXT NOT NULL,
+    foods TEXT NOT NULL,           -- JSON 格式食物清單
+    calories REAL NOT NULL,
+    meal_type TEXT DEFAULT 'meal', -- 🚀 餐次類型
+    portion_size REAL DEFAULT 100.0, -- 🚀 份量大小 (g)
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+```
+
+### API 使用範例
+
+#### 儲存餐點 (擴展版)
+
+```python
+from src.data_storage import store_meal
+
+# 基本用法 (向後相容)
+record_id = store_meal(
+    user_id="user_123",
+    foods={"蘋果": 52.0, "香蕉": 89.0},
+    calories=141.0
+)
+
+# 新功能：指定餐次和份量
+record_id = store_meal(
+    user_id="user_123",
+    foods={"燕麥片": 150.0, "牛奶": 60.0},
+    calories=210.0,
+    meal_type="breakfast",    # 🚀 餐次類型
+    portion_size=200.0       # 🚀 份量 200g
+)
+```
+
+#### 前序餐點查詢
+
+```python
+from src.data_storage import get_previous_meals
+
+# 晚餐前查看今日已吃的餐點
+previous_meals = get_previous_meals("user_123", "dinner")
+
+for meal_id, date, foods, calories, portion_size, meal_type in previous_meals:
+    print(f"{meal_type.upper()}: {calories} kcal ({portion_size}g)")
+    for food, cal in foods.items():
+        print(f"  - {food}: {cal} kcal")
+
+# 輸出範例:
+# BREAKFAST: 210.0 kcal (200.0g)
+#   - 燕麥片: 150.0 kcal
+#   - 牛奶: 60.0 kcal
+# LUNCH: 335.0 kcal (300.0g)
+#   - 雞胸肉: 200.0 kcal
+#   - 糙米飯: 110.0 kcal
+#   - 花椰菜: 25.0 kcal
+```
+
+#### 多日趨勢分析
+
+```python
+from src.data_storage import get_past_days
+
+# 分析過去 3 天飲食
+analysis = get_past_days("user_123", days=3)
+
+# 每日摘要
+for day in analysis['daily_summaries']:
+    print(f"📅 {day['date']}: {day['total_calories']} kcal")
+    for meal_type, count in day['meal_types'].items():
+        if count > 0:
+            print(f"   - {meal_type}: {count} 次")
+
+# 營養趨勢
+trends = analysis['nutrition_trends']
+print(f"\n📊 平均每日熱量: {trends['avg_daily_calories']:.1f} kcal")
+print(f"📊 最高單日熱量: {trends['max_daily_calories']:.1f} kcal")
+print(f"📊 熱量變異度: {trends['calorie_variance']:.1f}")
+
+# 餐次分布統計
+meal_stats = analysis['meal_type_stats']
+print(f"\n🍽️ 餐次分布 (總計 {analysis['total_meals']} 餐):")
+for meal_type, percentage in meal_stats.items():
+    print(f"   {meal_type}: {percentage:.1f}%")
+
+# 個性化建議
+print(f"\n💡 智慧營養建議:")
+for i, rec in enumerate(analysis['recommendations'], 1):
+    print(f"   {i}. {rec}")
+```
+
+### 🔮 未來 RAG 向量檢索擴展
+
+當前架構已為進階 AI 功能奠定基礎：
+
+#### 預留擴展欄位
+
+```sql
+-- 未來擴展欄位 (規劃中)
+ALTER TABLE meals ADD COLUMN meal_description TEXT;    -- 餐點描述文字
+ALTER TABLE meals ADD COLUMN embedding_vector BLOB;   -- 向量嵌入
+ALTER TABLE meals ADD COLUMN nutrition_tags TEXT;     -- 營養標籤 JSON
+```
+
+#### 語義相似檢索 (規劃)
+
+```python
+# 🔮 未來功能預覽
+from sentence_transformers import SentenceTransformer
+import pinecone
+
+def store_meal_with_embedding(user_id, foods, calories, meal_description=None):
+    """儲存餐點 + 向量嵌入"""
+
+    # 1. 儲存結構化資料
+    record_id = store_meal(user_id, foods, calories)
+
+    # 2. 生成語義嵌入
+    if meal_description:
+        model = SentenceTransformer('all-MiniLM-L6-v2')
+        embedding = model.encode(meal_description)
+
+        # 3. 儲存到向量資料庫
+        index = pinecone.Index("meal-embeddings")
+        index.upsert([(str(record_id), embedding.tolist(), {
+            'user_id': user_id,
+            'calories': calories,
+            'meal_type': meal_type
+        })])
+
+    return record_id
+
+def find_similar_meals(query_text, user_id, top_k=5):
+    """語義相似餐點檢索"""
+    model = SentenceTransformer('all-MiniLM-L6-v2')
+    query_embedding = model.encode(query_text)
+
+    # 向量檢索
+    index = pinecone.Index("meal-embeddings")
+    results = index.query(
+        vector=query_embedding.tolist(),
+        filter={'user_id': user_id},
+        top_k=top_k,
+        include_metadata=True
+    )
+
+    return results['matches']
+
+# 使用範例:
+# similar_meals = find_similar_meals("健康的早餐", "user_123")
+# for match in similar_meals:
+#     print(f"相似度: {match['score']:.3f}")
+#     print(f"熱量: {match['metadata']['calories']} kcal")
+```
+
+#### AI 驅動營養規劃 (規劃)
+
+```python
+# 🔮 未來整合 LLM + 向量檢索
+def generate_ai_meal_plan(user_id, target_calories, dietary_preferences):
+    """AI 驅動的個性化餐點規劃"""
+
+    # 1. 獲取用戶歷史偏好
+    user_history = get_past_days(user_id, days=30)
+
+    # 2. 向量檢索相似成功案例
+    similar_patterns = find_successful_nutrition_patterns(
+        target_calories, dietary_preferences
+    )
+
+    # 3. LLM 生成個性化計畫
+    meal_plan = generate_personalized_meal_plan(
+        user_history=user_history,
+        similar_patterns=similar_patterns,
+        target_calories=target_calories,
+        preferences=dietary_preferences
+    )
+
+    return meal_plan
+```
+
+### 測試覆蓋
+
+新功能包含完整的測試套件：
+
+```bash
+# 執行餐次功能測試
+python -m pytest tests/test_data_storage.py::TestMealTypeFeatures -v
+python -m pytest tests/test_data_storage.py::TestPreviousMeals -v
+python -m pytest tests/test_data_storage.py::TestPastDaysAnalysis -v
+python -m pytest tests/test_data_storage.py::TestDatabaseMigration -v
+
+# 演示新功能
+python demo_meal_types.py
+```
+
+### 向後相容性保證
+
+- ✅ 現有 API 完全向下相容
+- ✅ 自動資料庫遷移 (零停機)
+- ✅ 預設值處理 (meal_type='meal', portion_size=100.0)
+- ✅ 現有測試和功能無影響
+- ✅ 漸進式功能升級
 
 ---
 

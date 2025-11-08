@@ -46,7 +46,8 @@ CACHE_MAX_SIZE = 1000  # 最大快取項目數
 
 def setup_logging(log_level: str = "INFO", 
                   log_format: Optional[str] = None,
-                  enable_file_logging: bool = False) -> logging.Logger:
+                  enable_file_logging: bool = True,
+                  module_name: str = __name__) -> logging.Logger:
     """
     設定並配置日誌系統
     
@@ -481,10 +482,140 @@ def clear_cache() -> None:
     logger = logging.getLogger(__name__)
     logger.info("快取已清空")
 
+# ========== 全面日誌輔助函數 ==========
+
+def log_function_call(func_name: str, args: dict = None, logger: logging.Logger = None):
+    """記錄函數呼叫"""
+    if logger is None:
+        logger = logging.getLogger(__name__)
+    
+    args_str = f" with args: {args}" if args else ""
+    logger.info(f"🔧 呼叫函數: {func_name}{args_str}")
+
+def log_step_start(step_name: str, details: str = "", logger: logging.Logger = None):
+    """記錄步驟開始"""
+    if logger is None:
+        logger = logging.getLogger(__name__)
+    
+    details_str = f" - {details}" if details else""
+    logger.info(f"▶️  開始步驟: {step_name}{details_str}")
+
+def log_step_success(step_name: str, result: Any = None, logger: logging.Logger = None):
+    """記錄步驟成功"""
+    if logger is None:
+        logger = logging.getLogger(__name__)
+    
+    result_str = f" -> {result}" if result is not None else ""
+    logger.info(f"✅ 步驟完成: {step_name}{result_str}")
+
+def log_step_error(step_name: str, error: Exception, logger: logging.Logger = None):
+    """記錄步驟錯誤"""
+    if logger is None:
+        logger = logging.getLogger(__name__)
+    
+    logger.error(f"❌ 步驟失敗: {step_name} - {str(error)}")
+
+def log_food_recognition(foods: list, confidence: float = None, logger: logging.Logger = None):
+    """記錄食物識別結果"""
+    if logger is None:
+        logger = logging.getLogger(__name__)
+    
+    foods_str = "、".join(foods) if foods else "無"
+    confidence_str = f" (信心度: {confidence:.2f})" if confidence else ""
+    logger.info(f"🔍 識別食物: {foods_str}{confidence_str}")
+
+def log_nutrition_calculation(food: str, calories: float, logger: logging.Logger = None):
+    """記錄營養計算"""
+    if logger is None:
+        logger = logging.getLogger(__name__)
+    
+    logger.info(f"📊 營養計算: {food} -> {calories:.1f} kcal")
+
+def log_data_storage(user_id: str, meal_id: int, total_calories: float, logger: logging.Logger = None):
+    """記錄資料儲存"""
+    if logger is None:
+        logger = logging.getLogger(__name__)
+    
+    logger.info(f"💾 儲存餐點: 用戶 {user_id}, 餐點 #{meal_id}, 總熱量 {total_calories:.1f} kcal")
+
+def log_ai_recommendation(user_id: str, recommendation_length: int, source: str = "AI", logger: logging.Logger = None):
+    """記錄AI推薦"""
+    if logger is None:
+        logger = logging.getLogger(__name__)
+    
+    logger.info(f"🤖 生成推薦: 用戶 {user_id}, 來源 {source}, 長度 {recommendation_length} 字元")
+
+def log_discord_interaction(user_id: str, command: str, success: bool = True, logger: logging.Logger = None):
+    """記錄Discord互動"""
+    if logger is None:
+        logger = logging.getLogger(__name__)
+    
+    status = "成功" if success else "失敗"
+    logger.info(f"💬 Discord 互動: 用戶 {user_id}, 命令 {command}, 狀態 {status}")
+
+def log_performance_metric(operation: str, duration: float, logger: logging.Logger = None):
+    """記錄性能指標"""
+    if logger is None:
+        logger = logging.getLogger(__name__)
+    
+    logger.info(f"⚡ 性能指標: {operation} 耗時 {duration:.2f} 秒")
+
+def log_cache_operation(operation: str, key: str, hit: bool = None, logger: logging.Logger = None):
+    """記錄快取操作"""
+    if logger is None:
+        logger = logging.getLogger(__name__)
+    
+    if hit is not None:
+        result = "命中" if hit else "未命中"
+        logger.info(f"🗃️  快取 {result}: {operation} -> {key}")
+    else:
+        logger.info(f"🗃️  快取操作: {operation} -> {key}")
+
+# ========== 性能測試輔助函數 ==========
+
+def simulate_multi_user_load(users: int = 10, requests_per_user: int = 5):
+    """
+    模擬多用戶負載測試
+    
+    Args:
+        users: 模擬用戶數量
+        requests_per_user: 每個用戶的請求數量
+    
+    注意：
+    - 這是性能測試的基礎框架
+    - 實際測試需要結合具體業務邏輯
+    - SQLite 在高並發下可能成為瓶頸
+    - 未來考慮遷移到 PostgreSQL/MongoDB
+    """
+    logger = logging.getLogger(__name__)
+    logger.warning(f"⚠️  性能測試模擬: {users} 用戶, 每用戶 {requests_per_user} 請求")
+    logger.warning("💡 SQLite 並發限制: 考慮升級至 PostgreSQL/MongoDB")
+
+def check_database_bottlenecks():
+    """
+    檢查資料庫性能瓶頸
+    
+    SQLite 限制：
+    - 單一寫入者限制
+    - 檔案鎖定機制
+    - 不適合高並發場景
+    
+    建議升級路徑：
+    - PostgreSQL: 成熟關聯式資料庫
+    - MongoDB: NoSQL 彈性方案
+    - 雲端資料庫: Azure SQL, AWS RDS
+    """
+    logger = logging.getLogger(__name__)
+    logger.info("🔍 資料庫性能檢查:")
+    logger.info("  - SQLite: 適合 MVP 和小規模使用")
+    logger.info("  - 瓶頸: 並發寫入限制")
+    logger.info("  - 建議: 用戶數 >100 時考慮 PostgreSQL")
+
 # 模組級別的日誌器
 logger = logging.getLogger(__name__)
 
 # 在模組載入時執行基本設定
 if os.getenv('ENABLE_DETAILED_LOGGING', 'False').lower() == 'true':
     setup_logging(log_level=os.getenv('LOG_LEVEL', 'INFO'))
-    logger.info("Utils模組已載入，共用工具函數已就緒")
+
+logger.info("Utils模組已載入，共用工具函數已就緒")
