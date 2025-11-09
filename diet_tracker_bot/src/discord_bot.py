@@ -398,15 +398,10 @@ async def help_command(interaction: discord.Interaction):
     
     embed.add_field(
         name="🤖 其他命令",
-        value="• `/ask` - 向 AI 營養師提問\n• `/hello` - 打招呼互動\n• `/help` - 顯示此說明",
+        value="• `/hello` - 打招呼互動\n• `/help` - 顯示此說明",
         inline=False
     )
-    
-    embed.add_field(
-        name="🔜 即將推出",
-        value="• `/stats` - 詳細營養統計報告\n• 更多 AI 功能即將上線",
-        inline=False
-    )
+
     
     embed.set_footer(text="💡 小提示：上傳清晰的食物圖片可獲得更準確的分析結果")
     
@@ -900,7 +895,7 @@ def _format_track_response(
         inline=False
     )
     
-    embed.set_footer(text="💡 保持健康飲食，持續追蹤您的營養攝取")
+    embed.set_footer(text="💡 保持健康飲食，持續追蹤您的營養攝取 (本系統所產生之結果僅供參考)")
     
     return embed
 
@@ -958,10 +953,6 @@ async def _is_admin_or_owner_interaction(interaction: discord.Interaction) -> bo
         await bot.is_owner(interaction.user)
     )
 
-
-# ==================== 未來擴展命令架構 ====================
-
-# 刪除重複的 analyze 命令，現在主要的 analyze 命令在上面
 
 
 @bot.tree.command(name='history', description='查看您的飲食歷史記錄')
@@ -1083,7 +1074,11 @@ async def history_command(interaction: discord.Interaction, 天數: int = 7):
 
 
 @bot.tree.command(name='recommend', description='獲得個人化飲食建議')
-async def recommend_command(interaction: discord.Interaction, 餐次: str = None, 天數: int = 7):
+@discord.app_commands.describe(
+    meal='想要建議的餐次 (早餐/午餐/晚餐/點心)',
+    days='分析最近幾天的記錄 (預設 7 天)'
+)
+async def recommend_command(interaction: discord.Interaction, meal: str = None, days: int = 7):
     """
     /recommend 命令 - 基於歷史的個人化 RAG 推薦
     
@@ -1092,14 +1087,14 @@ async def recommend_command(interaction: discord.Interaction, 餐次: str = None
     
     Args:
         interaction: Discord 斜槓命令互動
-        餐次: 想要建議的餐次 (早餐/午餐/晚餐/點心),不提供則分析整體飲食
-        天數: 分析最近幾天的記錄,預設 7 天
+        meal: 想要建議的餐次 (早餐/午餐/晚餐/點心),不提供則分析整體飲食
+        days: 分析最近幾天的記錄,預設 7 天
     """
     try:
         user_id = str(interaction.user.id)
         
         # 參數驗證
-        if 天數 <= 0 or 天數 > 30:
+        if days <= 0 or days > 30:
             await interaction.response.send_message(
                 "❌ **天數參數錯誤**\n\n天數必須在 1-30 之間",
                 ephemeral=True
@@ -1109,7 +1104,7 @@ async def recommend_command(interaction: discord.Interaction, 餐次: str = None
         await interaction.response.send_message("🔄 **正在分析您的飲食歷史...**\n請稍候,AI 正在為您生成個人化建議")
         
         # 解析餐次類型
-        meal_type = _parse_meal_type_from_chinese(餐次) if 餐次 else 'meal'
+        meal_type = _parse_meal_type_from_chinese(meal) if meal else 'meal'
         
         # 獲取當前餐點資訊 (如果有)
         history_records = data_storage.get_history(user_id, 1)
@@ -1125,7 +1120,7 @@ async def recommend_command(interaction: discord.Interaction, 餐次: str = None
         # 呼叫 RAG 推薦引擎
         await interaction.edit_original_response(
             content="🤖 **AI 正在生成個人化建議...**\n"
-                   f"• 分析天數: {天數} 天\n"
+                   f"• 分析天數: {days} 天\n"
                    f"• 目標餐次: {_format_meal_type_chinese(meal_type)}\n"
                    "• 整合歷史數據中..."
         )
@@ -1135,17 +1130,17 @@ async def recommend_command(interaction: discord.Interaction, 餐次: str = None
             meal_type=meal_type,
             current_foods=current_foods,
             current_calories=current_calories,
-            days=天數
+            days=days
         )
         
         # 檢查是否有歷史記錄
-        all_history = data_storage.get_history(user_id, 天數)
+        all_history = data_storage.get_history(user_id, days)
         has_history = all_history and len(all_history) > 0
         
         # 建立推薦結果 Embed
         embed = discord.Embed(
             title="🤖 個人化飲食建議",
-            description=f"基於您最近 {天數} 天的飲食記錄",
+            description=f"基於您最近 {days} 天的飲食記錄",
             color=0x9b59b6,  # 紫色
             timestamp=datetime.now()
         )
@@ -1154,7 +1149,7 @@ async def recommend_command(interaction: discord.Interaction, 餐次: str = None
         if has_history:
             embed.add_field(
                 name="📊 分析範圍",
-                value=f"• **天數**: {天數} 天\n"
+                value=f"• **天數**: {days} 天\n"
                       f"• **記錄數**: {len(all_history)} 筆\n"
                       f"• **目標餐次**: {_format_meal_type_chinese(meal_type)}",
                 inline=False
@@ -1162,7 +1157,7 @@ async def recommend_command(interaction: discord.Interaction, 餐次: str = None
         else:
             embed.add_field(
                 name="ℹ️ 提示",
-                value=f"您是新用戶或最近 {天數} 天內沒有記錄。\n以下是基於一般營養原則的建議。",
+                value=f"您是新用戶或最近 {days} 天內沒有記錄。\n以下是基於一般營養原則的建議。",
                 inline=False
             )
         
@@ -1242,13 +1237,13 @@ async def recommend_command(interaction: discord.Interaction, 餐次: str = None
                 inline=False
             )
         
-        embed.set_footer(text="💡 建議會根據您的飲食記錄持續優化")
+        embed.set_footer(text="💡 建議會根據您的飲食記錄持續優化 (本系統所產生之結果僅供參考)")
         
         await interaction.edit_original_response(content=None, embed=embed)
         
         logger.info(
             f"用戶 {user_id} 請求個人化推薦 - "
-            f"餐次: {meal_type}, 天數: {天數}, 歷史記錄: {len(all_history) if all_history else 0} 筆"
+            f"餐次: {meal_type}, 天數: {days}, 歷史記錄: {len(all_history) if all_history else 0} 筆"
         )
         
     except Exception as e:
