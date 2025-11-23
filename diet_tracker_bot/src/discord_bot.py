@@ -267,17 +267,18 @@ async def analyze_food(interaction: discord.Interaction, 圖片: discord.Attachm
                 await interaction.edit_original_response(content="❌ 無法取得營養資訊，請稍後再試")
                 return
             
-            # 解包返回值: (營養字典, 總熱量)
-            nutrition_data, total_calories = nutrition_result
+            # 解包返回值: (營養字典, 總營養素)
+            # nutrition_data格式: {food_name: {'calories': float, 'protein': float, 'carbs': float, 'fat': float}}
+            nutrition_data, total_nutrients = nutrition_result
             
-            # 檢查是否有任何食物找到熱量資訊
-            if not nutrition_data or total_calories == 0:
-                # 沒有任何食物有熱量資訊
+            # 檢查是否有任何食物找到營養資訊
+            if not nutrition_data or total_nutrients['calories'] == 0:
+                # 沒有任何食物有營養資訊
                 food_list_text = ', '.join(foods)
                 await interaction.edit_original_response(
-                    content=f"❌ **無法獲取熱量資訊**\n\n"
+                    content=f"❌ **無法獲取營養資訊**\n\n"
                            f"識別的食物: {food_list_text}\n\n"
-                           f"這些食物在資料庫（TFND、USDA）和AI估算中都找不到熱量資訊。\n"
+                           f"這些食物在資料庫（TFND、USDA）和AI估算中都找不到營養資訊。\n"
                            f"請嘗試：\n"
                            f"• 使用更具體的食物名稱\n"
                            f"• 拍攝更清晰的照片\n"
@@ -287,24 +288,40 @@ async def analyze_food(interaction: discord.Interaction, 圖片: discord.Attachm
             
             # 根據份量調整營養數據（預設為100g基準）
             portion_factor = portion_size / 100.0
-            adjusted_nutrition_data = {
-                food: calories * portion_factor 
-                for food, calories in nutrition_data.items()
-            }
-            adjusted_total_calories = total_calories * portion_factor
+            adjusted_nutrition_data = {}
+            for food, nutrients in nutrition_data.items():
+                adjusted_nutrition_data[food] = {
+                    'calories': nutrients['calories'] * portion_factor,
+                    'protein': nutrients['protein'] * portion_factor,
+                    'carbs': nutrients['carbs'] * portion_factor,
+                    'fat': nutrients['fat'] * portion_factor
+                }
             
-            # 步驟 5: 儲存記錄（包含餐次和份量）
+            adjusted_total_nutrients = {
+                'calories': total_nutrients['calories'] * portion_factor,
+                'protein': total_nutrients['protein'] * portion_factor,
+                'carbs': total_nutrients['carbs'] * portion_factor,
+                'fat': total_nutrients['fat'] * portion_factor
+            }
+            
+            # 步驟 5: 儲存記錄（包含餐次、份量和營養素）
             await interaction.edit_original_response(
                 content=f"🔄 **步驟 5/6: 儲存飲食記錄...**\n\n"
                        f"餐次: {_format_meal_type_chinese(meal_type)}\n"
                        f"份量: {portion_size:.0f}g\n"
-                       f"熱量: {adjusted_total_calories:.0f} kcal"
+                       f"熱量: {adjusted_total_nutrients['calories']:.0f} kcal\n"
+                       f"蛋白質: {adjusted_total_nutrients['protein']:.1f}g\n"
+                       f"碳水: {adjusted_total_nutrients['carbs']:.1f}g\n"
+                       f"脂肪: {adjusted_total_nutrients['fat']:.1f}g"
             )
             
             meal_id = data_storage.store_meal(
                 user_id=user_id,
-                foods=adjusted_nutrition_data,
-                calories=adjusted_total_calories,
+                foods={food: n['calories'] for food, n in adjusted_nutrition_data.items()},  # 向後相容
+                calories=adjusted_total_nutrients['calories'],
+                protein=adjusted_total_nutrients['protein'],
+                carbs=adjusted_total_nutrients['carbs'],
+                fat=adjusted_total_nutrients['fat'],
                 meal_type=meal_type,
                 meal_type_custom=custom_meal_name,
                 portion_size=portion_size
@@ -316,11 +333,11 @@ async def analyze_food(interaction: discord.Interaction, 圖片: discord.Attachm
             )
             recommendation = recommendation_engine.get_recommendation(user_id, days=7)
             
-            # 建構回應訊息 (包含圖片、餐次和份量資訊)
+            # 建構回應訊息 (包含圖片、餐次、份量和營養素資訊)
             embed_response = _format_track_response(
                 foods=foods,
                 nutrition_data=adjusted_nutrition_data,
-                total_calories=adjusted_total_calories,
+                total_nutrients=adjusted_total_nutrients,
                 recommendation=recommendation,
                 meal_id=meal_id,
                 image_url=attachment.url,
@@ -336,7 +353,11 @@ async def analyze_food(interaction: discord.Interaction, 圖片: discord.Attachm
             
             logger.info(
                 f"成功處理追蹤請求 - 用戶: {user_id}, 食物: {foods}, "
-                f"餐次: {meal_type}, 份量: {portion_size}g, 熱量: {adjusted_total_calories:.0f}"
+                f"餐次: {meal_type}, 份量: {portion_size}g, "
+                f"熱量: {adjusted_total_nutrients['calories']:.0f}, "
+                f"蛋白質: {adjusted_total_nutrients['protein']:.1f}g, "
+                f"碳水: {adjusted_total_nutrients['carbs']:.1f}g, "
+                f"脂肪: {adjusted_total_nutrients['fat']:.1f}g"
             )
             
         finally:
@@ -809,8 +830,8 @@ async def _estimate_portion_from_image(image_path: str, foods: List[str]) -> flo
 
 def _format_track_response(
     foods: List[str], 
-    nutrition_data: Dict[str, float], 
-    total_calories: float,
+    nutrition_data: Dict[str, Dict[str, float]], 
+    total_nutrients: Dict[str, float],
     recommendation: str,
     meal_id: int,
     image_url: str = None,
@@ -818,12 +839,12 @@ def _format_track_response(
     portion_size: float = 100.0
 ) -> discord.Embed:
     """
-    格式化 track 命令的回應訊息為 Discord Embed（含餐次和份量資訊）
+    格式化 track 命令的回應訊息為 Discord Embed（含餐次、份量和營養素資訊）
     
     Args:
         foods: 識別到的食物列表
-        nutrition_data: 營養資訊字典 {食物名稱: 熱量}
-        total_calories: 總熱量
+        nutrition_data: 營養資訊字典 {食物名稱: {'calories': float, 'protein': float, 'carbs': float, 'fat': float}}
+        total_nutrients: 總營養素 {'calories': float, 'protein': float, 'carbs': float, 'fat': float}
         recommendation: AI 推薦內容
         meal_id: 餐點記錄 ID
         image_url: 用戶上傳的圖片 URL
@@ -861,10 +882,13 @@ def _format_track_response(
         inline=False
     )
     
-    # 建構營養詳情
+    # 建構營養詳情（顯示每種食物的主要營養素）
     nutrition_details = []
-    for food_name, calories in nutrition_data.items():
-        nutrition_details.append(f"• **{food_name}**: {calories:.1f} kcal")
+    for food_name, nutrients in nutrition_data.items():
+        detail = f"• **{food_name}**: {nutrients['calories']:.0f} kcal"
+        if nutrients['protein'] > 0 or nutrients['carbs'] > 0 or nutrients['fat'] > 0:
+            detail += f" (P:{nutrients['protein']:.1f}g C:{nutrients['carbs']:.1f}g F:{nutrients['fat']:.1f}g)"
+        nutrition_details.append(detail)
     
     nutrition_text = "\n".join(nutrition_details) if nutrition_details else "無詳細資訊"
     embed.add_field(
@@ -873,11 +897,17 @@ def _format_track_response(
         inline=False
     )
     
-    # 總熱量
+    # 總營養素（重點顯示）
+    total_text = (
+        f"🔥 **熱量**: {total_nutrients['calories']:.0f} kcal\n"
+        f"💪 **蛋白質**: {total_nutrients['protein']:.1f}g\n"
+        f"🍚 **碳水**: {total_nutrients['carbs']:.1f}g\n"
+        f"🥑 **脂肪**: {total_nutrients['fat']:.1f}g"
+    )
     embed.add_field(
-        name="🔥 總熱量",
-        value=f"{total_calories:.0f} kcal",
-        inline=True
+        name="� 總營養素",
+        value=total_text,
+        inline=False
     )
     
     # 截取推薦內容的關鍵部分
@@ -1005,21 +1035,30 @@ async def history_command(interaction: discord.Interaction, 天數: int = 7):
         # 計算總統計
         total_meals = len(history_records)
         total_calories = sum(record[3] for record in history_records)  # record[3] 是 calories
+        total_protein = sum(record[4] for record in history_records)   # record[4] 是 protein
+        total_carbs = sum(record[5] for record in history_records)     # record[5] 是 carbs
+        total_fat = sum(record[6] for record in history_records)       # record[6] 是 fat
         avg_calories = total_calories / total_meals if total_meals > 0 else 0
+        avg_protein = total_protein / total_meals if total_meals > 0 else 0
+        avg_carbs = total_carbs / total_meals if total_meals > 0 else 0
+        avg_fat = total_fat / total_meals if total_meals > 0 else 0
         
-        # 統計摘要
+        # 統計摘要（包含主要營養素）
         embed.add_field(
             name="📊 統計摘要",
             value=f"• **總餐數**: {total_meals} 餐\n"
                   f"• **總熱量**: {total_calories:.0f} kcal\n"
-                  f"• **平均熱量**: {avg_calories:.0f} kcal/餐",
+                  f"• **平均熱量**: {avg_calories:.0f} kcal/餐\n"
+                  f"• **平均蛋白質**: {avg_protein:.1f}g/餐\n"
+                  f"• **平均碳水**: {avg_carbs:.1f}g/餐\n"
+                  f"• **平均脂肪**: {avg_fat:.1f}g/餐",
             inline=False
         )
         
         # 顯示最近的記錄（最多5筆）
         recent_records = history_records[:5]
         
-        for i, (record_id, date, foods, calories, created_at, meal_type, meal_type_custom) in enumerate(recent_records):
+        for i, (record_id, date, foods, calories, protein, carbs, fat, created_at, meal_type, meal_type_custom) in enumerate(recent_records):
             # 解析日期
             try:
                 meal_date = datetime.fromisoformat(date.replace('Z', '+00:00'))
@@ -1039,9 +1078,12 @@ async def history_command(interaction: discord.Interaction, 天數: int = 7):
             else:
                 foods_text = "資料格式錯誤"
             
+            # 顯示營養素資訊
+            nutrition_summary = f"🔥{calories:.0f}kcal | 💪P:{protein:.1f}g | 🍚C:{carbs:.1f}g | 🥑F:{fat:.1f}g"
+            
             embed.add_field(
                 name=f"{meal_display} | {formatted_date}",
-                value=f"{foods_text}\n**總計**: {calories:.0f} kcal",
+                value=f"{foods_text}\n**{nutrition_summary}**",
                 inline=False
             )
         

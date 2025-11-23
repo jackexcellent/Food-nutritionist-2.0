@@ -55,7 +55,7 @@ logger = logging.getLogger(__name__)
 
 # API 配置
 GEMINI_API_KEY = os.getenv("GEMINI_KEY")
-DEFAULT_MODEL = "gemini-2.0-flash"  # 使用快速版本提升回應速度
+DEFAULT_MODEL = "gemini-2.0-flash" 
 
 # Gemini 客戶端初始化
 gemini_client = None

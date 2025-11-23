@@ -126,6 +126,9 @@ def _migrate_add_meal_columns(cursor: sqlite3.Cursor) -> None:
     - meal_type: 餐次類型（breakfast/lunch/dinner/snack）
     - portion_size: 份量大小，預設 100g
     - meal_type_custom: 自訂餐次名稱
+    - protein: 蛋白質 (g)
+    - carbs: 碳水化合物 (g)
+    - fat: 脂肪 (g)
     
     Args:
         cursor: SQLite 資料庫游標
@@ -161,6 +164,30 @@ def _migrate_add_meal_columns(cursor: sqlite3.Cursor) -> None:
                 ADD COLUMN meal_type_custom TEXT
             """)
             logger.info("已添加 meal_type_custom 欄位到現有資料庫")
+        
+        # 🚀 添加蛋白質欄位（如果不存在）
+        if 'protein' not in existing_columns:
+            cursor.execute("""
+                ALTER TABLE meals 
+                ADD COLUMN protein REAL DEFAULT 0.0
+            """)
+            logger.info("已添加 protein 欄位到現有資料庫")
+        
+        # 🚀 添加碳水化合物欄位（如果不存在）
+        if 'carbs' not in existing_columns:
+            cursor.execute("""
+                ALTER TABLE meals 
+                ADD COLUMN carbs REAL DEFAULT 0.0
+            """)
+            logger.info("已添加 carbs 欄位到現有資料庫")
+        
+        # 🚀 添加脂肪欄位（如果不存在）
+        if 'fat' not in existing_columns:
+            cursor.execute("""
+                ALTER TABLE meals 
+                ADD COLUMN fat REAL DEFAULT 0.0
+            """)
+            logger.info("已添加 fat 欄位到現有資料庫")
             
         logger.debug(f"資料庫遷移完成，現有欄位：{existing_columns}")
         
@@ -228,6 +255,9 @@ def init_database() -> None:
                     date TEXT NOT NULL,
                     foods TEXT NOT NULL,
                     calories REAL NOT NULL,
+                    protein REAL DEFAULT 0.0,
+                    carbs REAL DEFAULT 0.0,
+                    fat REAL DEFAULT 0.0,
                     meal_type TEXT DEFAULT 'meal',
                     meal_type_custom TEXT,
                     portion_size REAL DEFAULT 100.0,
@@ -269,17 +299,23 @@ def init_database() -> None:
 def store_meal(user_id: str, 
                foods: Dict[str, float], 
                calories: float,
+               protein: float = 0.0,
+               carbs: float = 0.0,
+               fat: float = 0.0,
                date: Optional[str] = None,
                meal_type: Optional[str] = None,
                meal_type_custom: Optional[str] = None,
                portion_size: Optional[float] = None) -> int:
     """
-    儲存用戶的一餐飲食記錄（擴展版）
+    儲存用戶的一餐飲食記錄（擴展版 - 多營養素）
     
     Args:
         user_id: 用戶唯一識別碼（Discord User ID 或其他）
         foods: 食物字典 {食物名稱: 熱量}，例如 {'apple': 52.0, 'banana': 89.0}
         calories: 總熱量（kcal）
+        protein: 總蛋白質（g），預設 0.0
+        carbs: 總碳水化合物（g），預設 0.0
+        fat: 總脂肪（g），預設 0.0
         date: 可選的日期時間字串（ISO 8601 格式），默認為當前時間
         🚀 meal_type: 餐次類型 ('breakfast', 'lunch', 'dinner', 'snack', 'latenight', 'other')，預設 'meal'
         🚀 meal_type_custom: 自定義餐次名稱（當 meal_type='other' 時使用）
@@ -293,31 +329,17 @@ def store_meal(user_id: str,
         ValueError: 參數驗證失敗
     
     使用範例:
-        # 基本用法（向後相容）
-        foods = {'apple': 52.0, 'banana': 89.0}
-        total = sum(foods.values())
-        record_id = store_meal('user_123', foods, total)
-        
-        # 新功能：指定餐次和份量
-        breakfast_foods = {'oatmeal': 150.0, 'milk': 60.0}
-        breakfast_calories = sum(breakfast_foods.values())
+        # 完整營養素記錄
         record_id = store_meal(
             user_id='user_123',
-            foods=breakfast_foods,
-            calories=breakfast_calories,
-            meal_type='breakfast',
-            portion_size=200.0  # 200g
+            foods={'雞胸肉': 165.0},
+            calories=165.0,
+            protein=31.0,
+            carbs=0.0,
+            fat=3.6,
+            meal_type='lunch',
+            portion_size=100.0
         )
-        
-        # 自定義餐次
-        record_id = store_meal(
-            user_id='user_123',
-            foods={'protein_shake': 120.0},
-            calories=120.0,
-            meal_type='other',
-            meal_type_custom='運動後補充'
-        )
-        print(f"自定義餐次記錄已儲存，ID: {record_id}")
     """
     
     # 參數驗證
@@ -329,6 +351,9 @@ def store_meal(user_id: str,
     
     if calories < 0:
         raise ValueError("calories 不能為負數")
+    
+    if protein < 0 or carbs < 0 or fat < 0:
+        raise ValueError("營養素不能為負數")
         
     # 餐次類型驗證
     valid_meal_types = {'breakfast', 'lunch', 'dinner', 'snack', 'latenight', 'other', 'meal'}
@@ -356,9 +381,9 @@ def store_meal(user_id: str,
             
             # 插入記錄（包含新欄位）
             cursor.execute("""
-                INSERT INTO meals (user_id, date, foods, calories, meal_type, meal_type_custom, portion_size)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (user_id, date, foods_json, calories, meal_type, meal_type_custom, portion_size))
+                INSERT INTO meals (user_id, date, foods, calories, protein, carbs, fat, meal_type, meal_type_custom, portion_size)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (user_id, date, foods_json, calories, protein, carbs, fat, meal_type, meal_type_custom, portion_size))
             
             # 獲取新記錄的 ID
             record_id = cursor.lastrowid
@@ -367,7 +392,8 @@ def store_meal(user_id: str,
             conn.commit()
             
             logger.info(f"已儲存飲食記錄: user_id={user_id}, meal_type={meal_type}, "
-                       f"custom={meal_type_custom}, calories={calories} kcal, "
+                       f"custom={meal_type_custom}, calories={calories:.0f} kcal, "
+                       f"protein={protein:.1f}g, carbs={carbs:.1f}g, fat={fat:.1f}g, "
                        f"portion={portion_size}g, record_id={record_id}")
             logger.debug(f"食物清單: {foods}")
             
@@ -380,9 +406,9 @@ def store_meal(user_id: str,
 
 
 def get_history(user_id: str, 
-                days: int = DEFAULT_HISTORY_DAYS) -> List[Tuple[int, str, Dict[str, float], float, str, str, str]]:
+                days: int = DEFAULT_HISTORY_DAYS) -> List[Tuple[int, str, Dict[str, float], float, float, float, float, str, str, str]]:
     """
-    獲取用戶的飲食歷史記錄
+    獲取用戶的飲食歷史記錄（擴展版 - 多營養素）
     
     Args:
         user_id: 用戶唯一識別碼
@@ -394,6 +420,9 @@ def get_history(user_id: str,
             - date (str): 日期時間
             - foods (Dict[str, float]): 食物字典
             - calories (float): 總熱量
+            - protein (float): 總蛋白質 (g)
+            - carbs (float): 總碳水化合物 (g)
+            - fat (float): 總脂肪 (g)
             - created_at (str): 創建時間
             - meal_type (str): 餐次類型
             - meal_type_custom (str): 自定義餐次名稱（可能為 None）
@@ -405,8 +434,8 @@ def get_history(user_id: str,
     使用範例:
         # 獲取最近 7 天的記錄
         history = get_history('user_123')
-        for record_id, date, foods, calories, created_at, meal_type, meal_custom in history:
-            print(f"{date} - {meal_type}: {calories} kcal")
+        for record_id, date, foods, calories, protein, carbs, fat, created_at, meal_type, meal_custom in history:
+            print(f"{date} - {meal_type}: {calories:.0f} kcal (P:{protein:.1f}g, C:{carbs:.1f}g, F:{fat:.1f}g)")
             for food, cal in foods.items():
                 print(f"  - {food}: {cal} kcal")
     """
@@ -424,9 +453,9 @@ def get_history(user_id: str,
             # 計算起始日期
             start_date = (datetime.now() - timedelta(days=days)).isoformat()
             
-            # 查詢記錄（包含餐次類型）
+            # 查詢記錄（包含餐次類型和營養素）
             cursor.execute("""
-                SELECT id, date, foods, calories, created_at, meal_type, meal_type_custom
+                SELECT id, date, foods, calories, protein, carbs, fat, created_at, meal_type, meal_type_custom
                 FROM meals
                 WHERE user_id = ? AND date >= ?
                 ORDER BY date DESC
@@ -442,6 +471,9 @@ def get_history(user_id: str,
                 date = row['date']
                 foods_json = row['foods']
                 calories = row['calories']
+                protein = row['protein'] if 'protein' in row.keys() else 0.0
+                carbs = row['carbs'] if 'carbs' in row.keys() else 0.0
+                fat = row['fat'] if 'fat' in row.keys() else 0.0
                 created_at = row['created_at']
                 meal_type = row['meal_type'] if 'meal_type' in row.keys() else 'meal'
                 meal_type_custom = row['meal_type_custom'] if 'meal_type_custom' in row.keys() else None
@@ -453,7 +485,7 @@ def get_history(user_id: str,
                     logger.warning(f"記錄 {record_id} 的 foods JSON 解析失敗: {e}")
                     foods = {}
                 
-                results.append((record_id, date, foods, calories, created_at, meal_type, meal_type_custom))
+                results.append((record_id, date, foods, calories, protein, carbs, fat, created_at, meal_type, meal_type_custom))
             
             logger.info(f"查詢歷史記錄: user_id={user_id}, days={days}, count={len(results)}")
             

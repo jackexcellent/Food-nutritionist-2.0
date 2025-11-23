@@ -1304,7 +1304,7 @@ import google.generativeai as genai
 
 # 自動初始化 (從 .env 載入 GEMINI_KEY)
 genai.configure(api_key=GEMINI_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash')
+model = genai.GenerativeModel('gemini-2.0-flash')
 
 # 構建結構化 prompt
 prompt = """
@@ -1754,7 +1754,7 @@ vision_prompt = """
 """
 
 # 3. 呼叫 Gemini Vision API
-response = genai.GenerativeModel('gemini-1.5-pro-vision').generate_content([
+response = genai.GenerativeModel('gemini-2.0-pro-vision').generate_content([
     vision_prompt,
     image_file
 ])

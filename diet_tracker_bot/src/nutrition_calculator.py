@@ -151,9 +151,9 @@ class NutritionCalculator:
             handle_error(e, "載入TFND資料庫", logger=logger, raise_error=False)
             self.tfnd_data = []
     
-    def get_nutrition(self, food_list: List[str]) -> Tuple[Dict[str, float], float]:
+    def get_nutrition(self, food_list: List[str]) -> Tuple[Dict[str, Dict[str, float]], Dict[str, float]]:
         """
-        獲取食物列表的營養資訊
+        獲取食物列表的營養資訊（擴展版 - 多營養素）
         
         這是主要的入口函數，處理完整的營養查詢流程：
         1. 優先檢查快取
@@ -161,26 +161,21 @@ class NutritionCalculator:
         3. 如果失敗，使用模糊匹配
         4. 如果仍失敗，呼叫USDA API
         5. 將結果存入快取
-        6. 計算總熱量
+        6. 計算總營養素
         
         Args:
-            food_list (List[str]): 食物名稱列表（英文，如 ['mackerel', 'apple']）
+            food_list (List[str]): 食物名稱列表（中文，如 ['鯖魚', '蘋果']）
         
         Returns:
-            Tuple[Dict[str, float], float]: 
-                - 字典: {食物名稱: 熱量(kcal)}
-                - 總熱量(kcal)
+            Tuple[Dict[str, Dict[str, float]], Dict[str, float]]: 
+                - 字典: {食物名稱: {'calories': float, 'protein': float, 'carbs': float, 'fat': float}}
+                - 總營養素: {'calories': float, 'protein': float, 'carbs': float, 'fat': float}
         
         使用範例:
             calculator = NutritionCalculator()
-            nutrition_dict, total = calculator.get_nutrition(['mackerel', 'apple'])
-            print(f"鯖魚: {nutrition_dict['mackerel']} kcal")
-            print(f"總熱量: {total} kcal")
-        
-        未來擴展：
-        - 支援中文食物名稱輸入
-        - 返回更多營養素資訊
-        - 支援份量參數調整營養值
+            nutrition_dict, totals = calculator.get_nutrition(['鯖魚', '蘋果'])
+            print(f"鯖魚: {nutrition_dict['鯖魚']['calories']} kcal, 蛋白質: {nutrition_dict['鯖魚']['protein']}g")
+            print(f"總熱量: {totals['calories']} kcal, 總蛋白質: {totals['protein']}g")
         """
         logger.info(f"開始計算 {len(food_list)} 種食物的營養資訊")
         
@@ -191,49 +186,57 @@ class NutritionCalculator:
                 # 清理食物名稱
                 clean_food_name = self._clean_food_name(food_name)
                 
-                # === 步驟1: 檢查快取 ===
-                cached_calories = get_cached_nutrition(clean_food_name)
-                if cached_calories is not None:
-                    nutrition_dict[food_name] = cached_calories
-                    logger.info(f"✅ {food_name}: {cached_calories:.1f} kcal (來源: 快取)")
-                    continue
-                
-                # === 步驟2: 嘗試從TFND資料庫查詢 ===
-                calories = self._query_tfnd_database(clean_food_name)
+                # === 步驟1: 從TFND資料庫查詢 ===
+                nutrients = self._query_tfnd_database(clean_food_name)
                 source = 'TFND'
                 
-                # === 步驟3: 如果TFND查詢失敗，嘗試USDA API ===
-                if calories == 0:
+                # === 步驟2: 如果TFND查詢失敗，嘗試USDA API ===
+                if nutrients['calories'] == 0:
                     logger.info(f"TFND未找到 '{clean_food_name}'，嘗試USDA API")
+                    # USDA API 暫時只返回熱量，保持向後相容
                     calories = self._query_usda_api(clean_food_name)
-                    source = 'USDA'
+                    if calories > 0:
+                        nutrients = {'calories': calories, 'protein': 0.0, 'carbs': 0.0, 'fat': 0.0}
+                        source = 'USDA'
                 
-                # === 步驟4: 如果USDA也失敗，使用LLM估算 ===
-                if calories == 0:
+                # === 步驟3: 如果USDA也失敗，使用LLM估算 ===
+                if nutrients['calories'] == 0:
                     logger.info(f"USDA未找到 '{clean_food_name}'，嘗試使用LLM估算")
                     calories = self._estimate_calories_with_llm(clean_food_name)
-                    source = 'LLM估算'
+                    if calories > 0:
+                        nutrients = {'calories': calories, 'protein': 0.0, 'carbs': 0.0, 'fat': 0.0}
+                        source = 'LLM估算'
                 
-                # === 步驟5: 只有在找到有效熱量時才存入快取和顯示 ===
-                if calories > 0:
-                    set_cached_nutrition(clean_food_name, calories, source)
-                    nutrition_dict[food_name] = calories
-                    logger.info(f"✅ {food_name}: {calories:.1f} kcal (來源: {source})")
+                # === 步驟4: 只有在找到有效熱量時才記錄 ===
+                if nutrients['calories'] > 0:
+                    nutrition_dict[food_name] = nutrients
+                    logger.info(f"✅ {food_name}: {nutrients['calories']:.1f} kcal, "
+                              f"蛋白質:{nutrients['protein']:.1f}g, "
+                              f"碳水:{nutrients['carbs']:.1f}g, "
+                              f"脂肪:{nutrients['fat']:.1f}g (來源: {source})")
                 else:
                     # 找不到任何資料，不顯示該食物
-                    logger.warning(f"⚠️ {food_name}: 無法從任何來源獲取熱量資訊，已跳過")
-                    # 不加入 nutrition_dict，這樣就不會顯示數字
+                    logger.warning(f"⚠️ {food_name}: 無法從任何來源獲取營養資訊，已跳過")
                 
             except Exception as e:
                 handle_error(e, f"查詢食物 '{food_name}' 的營養資訊", 
                            logger=logger, raise_error=False)
-                nutrition_dict[food_name] = DEFAULT_CALORIES
+                # 不加入 nutrition_dict
         
-        # 計算總熱量
-        total_calories = sum(nutrition_dict.values())
-        logger.info(f"總熱量: {total_calories} kcal")
+        # 計算總營養素
+        total_nutrients = {
+            'calories': sum(n['calories'] for n in nutrition_dict.values()),
+            'protein': sum(n['protein'] for n in nutrition_dict.values()),
+            'carbs': sum(n['carbs'] for n in nutrition_dict.values()),
+            'fat': sum(n['fat'] for n in nutrition_dict.values())
+        }
         
-        return nutrition_dict, total_calories
+        logger.info(f"總營養: {total_nutrients['calories']:.0f} kcal, "
+                   f"蛋白質:{total_nutrients['protein']:.1f}g, "
+                   f"碳水:{total_nutrients['carbs']:.1f}g, "
+                   f"脂肪:{total_nutrients['fat']:.1f}g")
+        
+        return nutrition_dict, total_nutrients
     
     def _clean_food_name(self, food_name: str) -> str:
         """
@@ -261,57 +264,69 @@ class NutritionCalculator:
         
         return cleaned
     
-    def _query_tfnd_database(self, food_name: str) -> float:
+    def _query_tfnd_database(self, food_name: str) -> Dict[str, float]:
         """
-        從TFND資料庫查詢食物熱量（支援中文）
+        從TFND資料庫查詢食物營養素（支援中文）
         
         查詢流程：
         1. 嘗試中文精確匹配 (樣品名稱、俗名)
         2. 如果失敗，使用模糊匹配找最接近的食物（閾值>80%）
-        3. 從欄位提取熱量值
+        3. 從欄位提取營養素值
         
         Args:
             food_name (str): 食物名稱（中文）
         
         Returns:
-            float: 熱量(kcal)，找不到時返回0
+            Dict[str, float]: 營養素字典 {'calories': 0, 'protein': 0, 'carbs': 0, 'fat': 0}
         """
+        empty_nutrients = {'calories': 0.0, 'protein': 0.0, 'carbs': 0.0, 'fat': 0.0}
+        
         if not self.tfnd_data:
             logger.warning("TFND資料庫為空，無法查詢")
-            return 0
+            return empty_nutrients
         
         # 步驟1：嘗試精確匹配（中文）
         for item in self.tfnd_data:
-            # 檢查樣品名稱
-            name_zh = str(item.get('樣品名稱', '')).lower()
+            # 檢查樣品名稱（使用 '樣品名稱' 欄位，舊資料庫格式）
+            sample_name = str(item.get('樣品名稱', '')).lower()
             # 檢查俗名（可能包含多個用逗號分隔）
             aliases = str(item.get('俗名', '')).lower()
+            
+            # 跳過標題列
+            if sample_name == '樣品名稱':
+                continue
             
             food_name_lower = food_name.lower()
             
             # 精確匹配樣品名稱
-            if food_name_lower in name_zh or name_zh in food_name_lower:
-                calories = self._extract_calories(item)
-                logger.info(f"✓ 精確匹配（樣品名稱）: '{food_name}' -> '{item.get('樣品名稱')}' ({calories} kcal)")
-                return calories
+            if sample_name and (food_name_lower in sample_name or sample_name in food_name_lower):
+                nutrients = self._extract_nutrients(item)
+                logger.info(f"✓ 精確匹配（樣品名稱）: '{food_name}' -> '{item.get('樣品名稱')}' "
+                          f"({nutrients['calories']:.0f} kcal, P:{nutrients['protein']:.1f}g, "
+                          f"C:{nutrients['carbs']:.1f}g, F:{nutrients['fat']:.1f}g)")
+                return nutrients
             
             # 精確匹配俗名
-            if aliases and (food_name_lower in aliases or any(food_name_lower in alias for alias in aliases.split(','))):
-                calories = self._extract_calories(item)
-                logger.info(f"✓ 精確匹配（俗名）: '{food_name}' -> '{item.get('樣品名稱')}' ({calories} kcal)")
-                return calories
+            if aliases and aliases != 'none' and (food_name_lower in aliases or any(food_name_lower in alias for alias in aliases.split(','))):
+                nutrients = self._extract_nutrients(item)
+                logger.info(f"✓ 精確匹配（俗名）: '{food_name}' -> '{item.get('樣品名稱')}' (俗名: {item.get('俗名')})"
+                          f"({nutrients['calories']:.0f} kcal, P:{nutrients['protein']:.1f}g, "
+                          f"C:{nutrients['carbs']:.1f}g, F:{nutrients['fat']:.1f}g)")
+                return nutrients
         
         # 步驟2：模糊匹配
         logger.debug(f"精確匹配失敗，嘗試模糊匹配: '{food_name}'")
         matched_item = self._fuzzy_match_food(food_name)
         
         if matched_item:
-            calories = self._extract_calories(matched_item)
-            logger.info(f"✓ 模糊匹配: '{food_name}' -> '{matched_item.get('樣品名稱')}' ({calories} kcal)")
-            return calories
+            nutrients = self._extract_nutrients(matched_item)
+            logger.info(f"✓ 模糊匹配: '{food_name}' -> '{matched_item.get('樣品名稱')}' "
+                      f"({nutrients['calories']:.0f} kcal, P:{nutrients['protein']:.1f}g, "
+                      f"C:{nutrients['carbs']:.1f}g, F:{nutrients['fat']:.1f}g)")
+            return nutrients
         
         logger.debug(f"TFND資料庫未找到匹配: '{food_name}'")
-        return 0
+        return empty_nutrients
     
     def _fuzzy_match_food(self, food_name: str) -> Optional[Dict[str, Any]]:
         """
@@ -334,14 +349,19 @@ class NutritionCalculator:
         food_items_map = {}  # 名稱到item的映射
         
         for item in self.tfnd_data:
-            name_zh = str(item.get('樣品名稱', ''))
-            if name_zh:
-                food_names.append(name_zh)
-                food_items_map[name_zh] = item
+            sample_name = str(item.get('樣品名稱', ''))
             
-            # 也加入俗名
+            # 跳過標題列
+            if sample_name == '樣品名稱':
+                continue
+            
+            if sample_name:
+                food_names.append(sample_name)
+                food_items_map[sample_name] = item
+            
+            # 也加入俗名（如果有）
             aliases = str(item.get('俗名', ''))
-            if aliases:
+            if aliases and aliases.lower() != 'none':
                 for alias in aliases.split(','):
                     alias = alias.strip()
                     if alias:
@@ -369,9 +389,96 @@ class NutritionCalculator:
         
         return None
     
+    def _extract_nutrients(self, food_item: Dict[str, Any]) -> Dict[str, float]:
+        """
+        從食物資料中提取營養素值（2024版 - 擴展版）
+        
+        提取主要營養素：熱量、蛋白質、碳水化合物、脂肪
+        支援兩種資料格式：
+        1. 新格式: nutrients_per_100g 結構 (tfnd_clean.jsonl)
+        2. 舊格式: 直接欄位 (tfnd_2024_fixed.json)
+        
+        Args:
+            food_item (Dict): 食物資料字典
+        
+        Returns:
+            Dict[str, float]: 營養素字典 {'calories': float, 'protein': float, 'carbs': float, 'fat': float}
+        """
+        nutrients = {
+            'calories': 0.0,
+            'protein': 0.0,
+            'carbs': 0.0,
+            'fat': 0.0
+        }
+        
+        # 檢查是否為新格式 (nutrients_per_100g)
+        nutrients_data = food_item.get('nutrients_per_100g', {})
+        
+        if nutrients_data:
+            # 新格式：從 nutrients_per_100g 結構提取
+            if '熱量' in nutrients_data:
+                cal_data = nutrients_data['熱量']
+                if isinstance(cal_data, dict) and 'value' in cal_data:
+                    nutrients['calories'] = float(cal_data['value'])
+            elif '修正熱量' in nutrients_data:
+                cal_data = nutrients_data['修正熱量']
+                if isinstance(cal_data, dict) and 'value' in cal_data:
+                    nutrients['calories'] = float(cal_data['value'])
+            
+            if '粗蛋白' in nutrients_data:
+                protein_data = nutrients_data['粗蛋白']
+                if isinstance(protein_data, dict) and 'value' in protein_data:
+                    nutrients['protein'] = float(protein_data['value'])
+            
+            if '總碳水化合物' in nutrients_data:
+                carbs_data = nutrients_data['總碳水化合物']
+                if isinstance(carbs_data, dict) and 'value' in carbs_data:
+                    nutrients['carbs'] = float(carbs_data['value'])
+            
+            if '粗脂肪' in nutrients_data:
+                fat_data = nutrients_data['粗脂肪']
+                if isinstance(fat_data, dict) and 'value' in fat_data:
+                    nutrients['fat'] = float(fat_data['value'])
+        else:
+            # 舊格式：直接從欄位提取 (tfnd_2024_fixed.json)
+            # 熱量
+            if '修正熱量(kcal)' in food_item:
+                try:
+                    nutrients['calories'] = float(food_item['修正熱量(kcal)'])
+                except (ValueError, TypeError):
+                    pass
+            elif '熱量(kcal)' in food_item:
+                try:
+                    nutrients['calories'] = float(food_item['熱量(kcal)'])
+                except (ValueError, TypeError):
+                    pass
+            
+            # 蛋白質
+            if '粗蛋白(g)' in food_item:
+                try:
+                    nutrients['protein'] = float(food_item['粗蛋白(g)'])
+                except (ValueError, TypeError):
+                    pass
+            
+            # 碳水化合物
+            if '總碳水化合物(g)' in food_item:
+                try:
+                    nutrients['carbs'] = float(food_item['總碳水化合物(g)'])
+                except (ValueError, TypeError):
+                    pass
+            
+            # 脂肪
+            if '粗脂肪(g)' in food_item:
+                try:
+                    nutrients['fat'] = float(food_item['粗脂肪(g)'])
+                except (ValueError, TypeError):
+                    pass
+        
+        return nutrients
+    
     def _extract_calories(self, food_item: Dict[str, Any]) -> float:
         """
-        從食物資料中提取熱量值（2024版）
+        從食物資料中提取熱量值（向後相容）
         
         Args:
             food_item (Dict): 食物資料字典
@@ -379,25 +486,48 @@ class NutritionCalculator:
         Returns:
             float: 熱量(kcal)，找不到時返回0
         """
-        # 新版資料格式直接從欄位取得
-        calorie_keys = ['修正熱量(kcal)', '熱量(kcal)']
+        nutrients = self._extract_nutrients(food_item)
+        return nutrients['calories']
+    
+    def _sanitize_food_name_for_api(self, food_name: str) -> str:
+        """
+        清理食物名稱以適配 USDA API
         
-        for key in calorie_keys:
-            if key in food_item:
-                calorie_value = food_item[key]
-                
-                # 處理可能的資料類型
-                if isinstance(calorie_value, (int, float)):
-                    return float(calorie_value)
-                elif isinstance(calorie_value, str):
-                    try:
-                        return float(calorie_value)
-                    except ValueError:
-                        logger.warning(f"無法轉換熱量值: {calorie_value}")
-                        continue
+        移除或替換可能導致 API 錯誤的特殊字元，例如：
+        - 括號內容（通常是備註）
+        - 斜線（通常表示別名）
+        - 其他特殊符號
         
-        logger.warning(f"未找到熱量資訊: {food_item.get('樣品名稱', 'Unknown')}")
-        return 0
+        Args:
+            food_name (str): 原始食物名稱
+        
+        Returns:
+            str: 清理後的食物名稱
+        
+        Example:
+            >>> _sanitize_food_name_for_api("山葵/芥末（wasabi）")
+            "山葵 wasabi"
+        """
+        import re
+        
+        # 移除括號，但保留括號內的英文（可能是關鍵字）
+        # 例如：山葵/芥末（wasabi） -> 山葵/芥末 wasabi
+        clean_name = re.sub(r'[（(]([a-zA-Z\s]+)[）)]', r' \1', food_name)
+        
+        # 移除其他括號內容
+        clean_name = re.sub(r'[（(][^）)]*[）)]', '', clean_name)
+        
+        # 將斜線替換為空格
+        clean_name = clean_name.replace('/', ' ')
+        
+        # 移除多餘空格
+        clean_name = ' '.join(clean_name.split())
+        
+        # 如果清理後為空，返回原始名稱
+        if not clean_name.strip():
+            return food_name
+        
+        return clean_name.strip()
     
     def _query_usda_api(self, food_name: str) -> float:
         """
@@ -425,15 +555,18 @@ class NutritionCalculator:
             return 0
         
         try:
+            # 清理食物名稱：移除可能導致 API 錯誤的特殊字元
+            clean_name = self._sanitize_food_name_for_api(food_name)
+            
             # 構建API請求
             url = f"{USDA_API_BASE_URL}/foods/search"
             params = {
-                'query': food_name,
+                'query': clean_name,
                 'api_key': self.usda_api_key,
                 'pageSize': 1  # 只取第一個結果
             }
             
-            logger.debug(f"查詢USDA API: {food_name}")
+            logger.debug(f"查詢USDA API: '{food_name}' -> '{clean_name}'")
             response = requests.get(url, params=params, timeout=10)
             response.raise_for_status()
             
@@ -465,6 +598,17 @@ class NutritionCalculator:
             logger.info(f"USDA API 未找到匹配: '{food_name}'")
             return 0
             
+        except requests.exceptions.HTTPError as e:
+            # 特別處理 HTTP 錯誤
+            if e.response.status_code == 500:
+                logger.warning(
+                    f"USDA API 伺服器錯誤 (500): '{food_name}'，"
+                    f"可能因查詢字串包含特殊字元。已嘗試清理但仍失敗，將使用 LLM 估算。"
+                )
+            else:
+                handle_error(e, f"USDA API 請求失敗 ({e.response.status_code}): {food_name}", 
+                            logger=logger, raise_error=False)
+            return 0
         except requests.exceptions.RequestException as e:
             handle_error(e, f"USDA API 請求失敗: {food_name}", 
                         logger=logger, raise_error=False)
