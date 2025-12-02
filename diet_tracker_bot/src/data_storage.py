@@ -663,7 +663,7 @@ def get_previous_meals(user_id: str, current_meal_type: str) -> List[Tuple[int, 
             today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
             
             # 定義餐次順序
-            meal_order = {'breakfast': 1, 'lunch': 2, 'dinner': 3, 'snack': 4}
+            meal_order = {'breakfast': 1, 'lunch': 2, 'dinner': 3, 'snack': 4, 'latenight': 5}
             current_order = meal_order.get(current_meal_type, 999)
             
             # 查詢今日之前餐次的記錄
@@ -678,6 +678,7 @@ def get_previous_meals(user_id: str, current_meal_type: str) -> List[Tuple[int, 
                         UNION SELECT 'lunch', 2
                         UNION SELECT 'dinner', 3  
                         UNION SELECT 'snack', 4
+                        UNION SELECT 'latenight', 5
                     ) meal_types
                     WHERE sort_order < ?
                 )
@@ -793,7 +794,7 @@ def get_past_days(user_id: str, days: int = 3) -> Dict[str, Any]:
             
             # 初始化分析資料
             daily_summaries = {}
-            meal_type_totals = {'breakfast': 0, 'lunch': 0, 'dinner': 0, 'snack': 0, 'meal': 0}
+            meal_type_totals = {'breakfast': 0, 'lunch': 0, 'dinner': 0, 'snack': 0, 'latenight': 0, 'other': 0, 'meal': 0}
             daily_calories = []
             daily_portions = []
             total_meals = len(rows)
@@ -817,7 +818,7 @@ def get_past_days(user_id: str, days: int = 3) -> Dict[str, Any]:
                         'date': date_str,
                         'total_calories': 0,
                         'meals': [],
-                        'meal_types': {'breakfast': 0, 'lunch': 0, 'dinner': 0, 'snack': 0, 'meal': 0}
+                        'meal_types': {'breakfast': 0, 'lunch': 0, 'dinner': 0, 'snack': 0, 'latenight': 0, 'other': 0, 'meal': 0}
                     }
                 
                 daily_summaries[date_str]['total_calories'] += calories

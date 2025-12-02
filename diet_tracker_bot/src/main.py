@@ -419,7 +419,7 @@ def run_cli():
     parser.add_argument(
         '--version', '-v',
         action='version',
-        version='Diet Tracker Bot v1.0.0 (MVP)'
+        version='Diet Tracker Bot v2.0.0'
     )
     
     args = parser.parse_args()

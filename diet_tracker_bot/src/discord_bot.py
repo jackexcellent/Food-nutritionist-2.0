@@ -203,19 +203,23 @@ async def analyze_food(interaction: discord.Interaction, 圖片: discord.Attachm
                 temp_file.write(image_data)
                 temp_path = temp_file.name
             
-            # 步驟 1: 食物識別
+            # 步驟 1: 食物識別（第一階段驗證）
             await interaction.edit_original_response(content="🔄 **步驟 1/6: 識別食物中...**")
             foods = image_processor.process_image(temp_path)
             
+            # 第一階段驗證：如果識別不到食物就停止
             if not foods:
                 await interaction.edit_original_response(
                     content="❓ **無法識別圖片中的食物**\n\n"
+                           "此圖片可能不包含食物，或圖片品質不佳。\n\n"
                            "請嘗試：\n"
-                           "• 確保圖片清晰\n"
-                           "• 食物佔據畫面主體\n"
-                           "• 光線充足\n"
-                           "• 或手動輸入食物名稱"
+                           "• 確保圖片中包含可食用的食物\n"
+                           "• 確保圖片清晰且食物佔據畫面主體\n"
+                           "• 確保光線充足\n"
+                           "• 重新拍攝食物照片"
                 )
+                # 提早返回，不再繼續後續步驟
+                logger.info(f"用戶 {user_id} 上傳的圖片未識別到食物，已停止處理")
                 return
             
             # 步驟 2: 詢問餐次類型
@@ -473,30 +477,35 @@ class MealTypeView(discord.ui.View):
     async def breakfast_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.meal_type = 'breakfast'
         await interaction.response.edit_message(content="✅ 已選擇：**早餐**", view=None)
+        # await interaction.response.send_message("✅ 已選擇：**早餐**", ephemeral=True)
         self.stop()
     
     @discord.ui.button(label="🌞 午餐", style=discord.ButtonStyle.primary)
     async def lunch_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.meal_type = 'lunch'
         await interaction.response.edit_message(content="✅ 已選擇：**午餐**", view=None)
+        # await interaction.response.send_message("✅ 已選擇：**午餐**", ephemeral=True)
         self.stop()
     
     @discord.ui.button(label="🌙 晚餐", style=discord.ButtonStyle.primary)
     async def dinner_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.meal_type = 'dinner'
         await interaction.response.edit_message(content="✅ 已選擇：**晚餐**", view=None)
+        # await interaction.response.send_message("✅ 已選擇：**晚餐**", ephemeral=True)
         self.stop()
     
     @discord.ui.button(label="🍿 點心", style=discord.ButtonStyle.secondary)
     async def snack_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.meal_type = 'snack'
         await interaction.response.edit_message(content="✅ 已選擇：**點心**", view=None)
+        # await interaction.response.send_message("✅ 已選擇：**點心**", ephemeral=True)
         self.stop()
     
     @discord.ui.button(label="🌃 宵夜", style=discord.ButtonStyle.secondary)
     async def latenight_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.meal_type = 'latenight'
         await interaction.response.edit_message(content="✅ 已選擇：**宵夜**", view=None)
+        # await interaction.response.send_message("✅ 已選擇：**宵夜**", ephemeral=True)
         self.stop()
     
     @discord.ui.button(label="✏️ 其他", style=discord.ButtonStyle.success, row=1)
@@ -564,12 +573,12 @@ async def _ask_meal_type(interaction: discord.Interaction, user_id: str) -> Opti
         # 儲存到 bot 以便後續取得自定義餐次名稱
         bot._last_meal_view = view
         
-        # 發送選擇訊息
+        # 發送選擇訊息（只有用戶自己看得到）
         await interaction.followup.send(
             "🍽️ **請選擇餐次類型**\n"
             "請點擊下方按鈕選擇，或點選「其他」自行輸入",
             view=view,
-            ephemeral=False
+            ephemeral=True
         )
         
         # 等待用戶選擇
@@ -836,7 +845,7 @@ def _format_track_response(
     meal_id: int,
     image_url: str = None,
     meal_type: str = 'meal',
-    portion_size: float = 100.0
+    portion_size: float = 500.0
 ) -> discord.Embed:
     """
     格式化 track 命令的回應訊息為 Discord Embed（含餐次、份量和營養素資訊）
@@ -867,7 +876,8 @@ def _format_track_response(
         embed.set_image(url=image_url)
     
     # 餐次和份量資訊
-    meal_info = f"{_format_meal_type_chinese(meal_type)} | 📏 份量: {portion_size:.0f}g"
+    # meal_info = f"{_format_meal_type_chinese(meal_type)} | 📏 份量: {portion_size:.0f}g"
+    meal_info = f"{_format_meal_type_chinese(meal_type)}"
     embed.add_field(
         name="🕐 餐次資訊",
         value=meal_info,
@@ -886,8 +896,8 @@ def _format_track_response(
     nutrition_details = []
     for food_name, nutrients in nutrition_data.items():
         detail = f"• **{food_name}**: {nutrients['calories']:.0f} kcal"
-        if nutrients['protein'] > 0 or nutrients['carbs'] > 0 or nutrients['fat'] > 0:
-            detail += f" (P:{nutrients['protein']:.1f}g C:{nutrients['carbs']:.1f}g F:{nutrients['fat']:.1f}g)"
+        # if nutrients['protein'] > 0 or nutrients['carbs'] > 0 or nutrients['fat'] > 0:
+        #     detail += f" (P:{nutrients['protein']:.1f}g C:{nutrients['carbs']:.1f}g F:{nutrients['fat']:.1f}g)"
         nutrition_details.append(detail)
     
     nutrition_text = "\n".join(nutrition_details) if nutrition_details else "無詳細資訊"
@@ -898,14 +908,19 @@ def _format_track_response(
     )
     
     # 總營養素（重點顯示）
-    total_text = (
-        f"🔥 **熱量**: {total_nutrients['calories']:.0f} kcal\n"
-        f"💪 **蛋白質**: {total_nutrients['protein']:.1f}g\n"
-        f"🍚 **碳水**: {total_nutrients['carbs']:.1f}g\n"
-        f"🥑 **脂肪**: {total_nutrients['fat']:.1f}g"
-    )
+    total_text = f"🔥 **熱量**: {total_nutrients['calories']:.0f} kcal"
+    
+    if total_nutrients['protein'] > 0:
+        total_text += f"\n💪 **蛋白質**: {total_nutrients['protein']:.1f}g"
+    
+    if total_nutrients['carbs'] > 0:
+        total_text += f"\n🍚 **碳水**: {total_nutrients['carbs']:.1f}g"
+    
+    if total_nutrients['fat'] > 0:
+        total_text += f"\n🥑 **脂肪**: {total_nutrients['fat']:.1f}g"
+        
     embed.add_field(
-        name="� 總營養素",
+        name="📋 總營養素",
         value=total_text,
         inline=False
     )
@@ -1322,12 +1337,12 @@ async def hello_command(interaction: discord.Interaction):
     
     embed.add_field(
         name="🚀 開始使用",
-        value="• `/analyze` - 上傳食物圖片開始分析\n• `/history` - 查看飲食記錄\n• `/help` - 查看所有功能",
+        value="• `/analyze` - 上傳食物圖片開始分析\n• `/history` - 查看飲食記錄\n• `/recommend` - 獲得個人化飲食建議\n• `/help` - 查看所有功能",
         inline=False
     )
     
     embed.add_field(
-        name="💡 小貼士",
+        name="💡 貼心小提醒",
         value="拍攝食物照片時，請確保光線充足、食物清晰可見，這樣我就能給您更準確的分析結果！",
         inline=False
     )

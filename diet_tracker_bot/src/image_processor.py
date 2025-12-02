@@ -181,6 +181,7 @@ class ImageProcessor:
 3. 列出所有可見的配菜和醬料
 4. 如果有多個相同食物，請標注數量
 5. 格式：食物名稱（英文名稱）
+6. **只列出真正的食物，不要包含餐具、容器、背景物品等非食物項目**
 
 請按照這個格式回答，每行一個食物項目：
 - 食物名稱（English Name）
@@ -213,10 +214,28 @@ class ImageProcessor:
             response_text (str): Gemini 返回的文本
         
         Returns:
-            List[str]: 解析出的食物項目列表
+            List[str]: 解析出的食物項目列表（如果不是食物圖片則返回空列表）
         """
+        # 檢查是否為非食物圖片
+        response_lower = response_text.lower()
+        non_food_indicators = [
+            '非食物', '不是食物', '沒有食物', 'not food', 'no food',
+            '沒有看到食物', '無法識別食物', '不包含食物'
+        ]
+        
+        if any(indicator in response_lower for indicator in non_food_indicators):
+            logger.info("Gemini 識別：圖片中不包含食物")
+            return []
+        
         food_items = []
         lines = response_text.strip().split('\n')
+        
+        # 非食物關鍵字黑名單
+        non_food_keywords = [
+            '餐具', '盤子', '碗', '筷子', '叉子', '湯匙', '刀', '杯子', '桌子', '桌布',
+            'plate', 'bowl', 'chopsticks', 'fork', 'spoon', 'knife', 'cup', 'table',
+            '手', '人', '臉', '背景', '容器', '包裝', 'hand', 'person', 'face', 'background'
+        ]
         
         # 過濾掉開頭的禮貌性回應或說明文字
         skip_phrases = ['好的', '我來', '分析', '以下是', '讓我', '這張圖', '根據', '可以看到']
@@ -237,6 +256,12 @@ class ImageProcessor:
                 line = line.lstrip('-*• ')
             elif line.startswith(('1.', '2.', '3.', '4.', '5.', '6.', '7.', '8.', '9.')):
                 line = line.lstrip('0123456789. ')
+            
+            # 過濾非食物項目
+            line_lower = line.lower()
+            if any(keyword in line_lower for keyword in non_food_keywords):
+                logger.debug(f"過濾非食物項目: {line}")
+                continue
             
             # 只保留包含食物描述的行(通常包含括號或中文食物名稱)
             if line and (('(' in line and ')' in line) or any('\u4e00' <= c <= '\u9fff' for c in line)):
