@@ -25,7 +25,7 @@ The system allows users to upload meal images through Discord, identifies food i
 
 ## System Architecture
 
-![System Architecture](diet_tracker_bot/docs/流程圖.jpg)
+![Food Nutritionist 2.0 System Workflow](diet_tracker_bot/docs/system_workflow.png)
 
 ## Technologies
 
