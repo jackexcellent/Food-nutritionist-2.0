@@ -50,6 +50,7 @@ Additional project materials:
 
 - [Project Report (Chinese)](diet_tracker_bot/docs/report/食物營養師專題報告.pdf)
 - [Presentation Slides (Chinese)](diet_tracker_bot/docs/report/食物圖像辨識及%20RAG結合VLM之%20食物營養推薦模型.pptx)
+- [English Project Poster](diet_tracker_bot/docs/report/food_nutritionist_english_poster.pdf)
 
 ## Disclaimer
 
