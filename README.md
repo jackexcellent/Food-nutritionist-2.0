@@ -48,8 +48,8 @@ For detailed installation instructions, API configuration, module descriptions, 
 
 Additional project materials:
 
-- [Project Report](diet_tracker_bot/docs/report/食物營養師專題報告.pdf)
-- [Presentation Slides](diet_tracker_bot/docs/report/食物圖像辨識及%20RAG結合VLM之%20食物營養推薦模型.pptx)
+- [Project Report (Chinese)](diet_tracker_bot/docs/report/食物營養師專題報告.pdf)
+- [Presentation Slides (Chinese)](diet_tracker_bot/docs/report/食物圖像辨識及%20RAG結合VLM之%20食物營養推薦模型.pptx)
 
 ## Disclaimer
 
